@@ -34,14 +34,32 @@ export default function ResetPasswordScreen() {
   const passwordTooShort =
     newPassword.length > 0 && newPassword.length < MIN_PASSWORD_LEN;
 
-  // ✅ Важно: НЕ завязываем canSave на phase, чтобы TS не сужал типы и не ругался
   const canSave =
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
+  // ✅ Принимаем оба формата:
+  // - старый: holdyou://reset-password?... (host = reset-password)
+  // - новый:  holdyou:///auth/reset-password?... (path = /auth/reset-password)
+  const isResetPasswordDeepLink = (url: string) => {
+    if (!url) return false;
+    const u = url.toLowerCase();
+
+    // общий safe-check на scheme
+    if (!u.startsWith('holdyou://')) return false;
+
+    // старый формат
+    if (u.startsWith('holdyou://reset-password')) return true;
+
+    // новый формат (тройной слэш / путь)
+    // варианты которые реально приходят: holdyou:///auth/reset-password, holdyou://auth/reset-password
+    if (u.includes('://') && u.includes('/auth/reset-password')) return true;
+
+    return false;
+  };
+
   // ВАЖНО: строим "https callback", чтобы supabase-js смог распарсить code/hash
   const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    // incomingUrl: holdyou://reset-password?... (или без ?)
-    // В query мы кладём "всё" (query+hash из веба) и обычно это может быть encoded.
+    // Берём ВСЁ после "?" (это наш payload, туда мы с веба кладём query+hash)
     const qIndex = incomingUrl.indexOf('?');
     const rawAfterQ = qIndex >= 0 ? incomingUrl.slice(qIndex + 1) : '';
 
@@ -97,7 +115,7 @@ export default function ResetPasswordScreen() {
   // Слушаем deep link + cold start
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      if (url.startsWith('holdyou://reset-password')) {
+      if (isResetPasswordDeepLink(url)) {
         setPhase('boot');
         handleIncomingResetLink(url);
       }
@@ -108,7 +126,8 @@ export default function ResetPasswordScreen() {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && initialUrl.startsWith('holdyou://reset-password')) {
+
+        if (initialUrl && isResetPasswordDeepLink(initialUrl)) {
           await handleIncomingResetLink(initialUrl);
           return;
         }
@@ -272,7 +291,6 @@ export default function ResetPasswordScreen() {
   );
 }
 
-// ВИЗУАЛ 1-в-1 как модалки в app/onboarding/login.tsx
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
