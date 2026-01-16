@@ -87,11 +87,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const refreshUser = async (): Promise<User | null> => {
+    // ✅ важно: после подтверждения email Supabase может не обновить user,
+    // пока мы не обновим сессию/токены
+    try {
+      await supabase.auth.refreshSession();
+    } catch (e) {
+      // refreshSession может падать если нет активной сессии — это ок
+      console.warn('refreshSession warning', e);
+    }
+
     const { data, error } = await supabase.auth.getUser();
     if (error) {
       console.warn('refreshUser error', error);
       throw error;
     }
+
     setUser(data.user ?? null);
     return data.user ?? null;
   };
@@ -125,9 +135,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       options: {
         data: { full_name: fullName },
 
-        // ✅ ВАЖНО: именно это заставит письмо после подтверждения
-        // редиректить на /confirmed, а не на корень сайта.
-        emailRedirectTo: 'https://holdyou.app/confirmed',
+        // ✅ письмо после подтверждения редиректит на /confirmed
+        // Добавил source=email (не обязательно, но удобно для отладки/аналитики)
+        emailRedirectTo: 'https://holdyou.app/confirmed?source=email',
       },
     });
 
@@ -142,7 +152,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    // Пока оставляем как есть, но потом лучше привести к /reset и добавить в Redirect URLs.
+    // ⚠️ этот URL ДОЛЖЕН существовать на сайте (Next.js).
+    // Сейчас у тебя такого роута ещё нет — мы создадим:
+    // holdyou-web/app/auth/reset-password/page.tsx
     const redirectTo = 'https://holdyou.app/auth/reset-password';
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {

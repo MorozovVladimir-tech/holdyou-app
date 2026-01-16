@@ -1,5 +1,5 @@
 // app/onboarding/login.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
@@ -11,6 +11,8 @@ import {
   TextInput,
   ActivityIndicator,
   Linking,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
@@ -52,7 +54,6 @@ export default function Login() {
     loginWithEmail,
     registerWithEmail,
     sendPasswordReset,
-    logout,
     refreshUser,
     authLoading,
     isAuthenticated,
@@ -104,6 +105,110 @@ export default function Login() {
   const modalAnimatedStyle = useAnimatedStyle(() => ({
     opacity: modalOpacity.value,
   }));
+
+  // =========================
+  // ✅ CORE FIX: deep link + resume refresh
+  // =========================
+
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+  const tryRefreshAndEnter = async (source: 'deeplink' | 'resume') => {
+    // Если модалка confirm открыта — НЕ закрываем сразу.
+    // Сначала проверим подтверждение, потом закроем и пустим внутрь.
+    setErrorMessage(null);
+
+    try {
+      const u = await refreshUser();
+
+      const anyUser = u as unknown as {
+        email_confirmed_at?: string | null;
+        confirmed_at?: string | null;
+      } | null;
+
+      const confirmed = Boolean(
+        anyUser?.email_confirmed_at || anyUser?.confirmed_at
+      );
+
+      if (confirmed) {
+        setModalType('none');
+        router.replace('/(tabs)/talk');
+        return;
+      }
+
+      // Если не подтверждено — если мы пришли по диплинку/резюму, покажем подсказку, но оставим confirm.
+      if (modalType === 'confirm') {
+        setErrorMessage('Email is not confirmed yet. Please check your inbox.');
+      } else if (source === 'deeplink' || source === 'resume') {
+        // Пользователь мог вернуться без открытия confirm модалки — не насилуем UI.
+        // Просто оставим на текущем экране.
+      }
+    } catch (error: unknown) {
+      const message =
+        (error as { message?: string })?.message ??
+        'Could not verify confirmation. Please try again.';
+      console.log('auto-confirm-check error', error);
+      // Показываем ошибку только если confirm модалка открыта, иначе не шумим.
+      if (modalType === 'confirm') setErrorMessage(message);
+    }
+  };
+
+  // 1) Ловим deep link holdyou://confirmed
+  useEffect(() => {
+    const onUrl = ({ url }: { url: string }) => {
+      // нас интересует только confirmed (а позже добавим reset-password)
+      if (url.startsWith('holdyou://confirmed')) {
+        // Пользователь подтвердил на вебе → мы в приложении
+        // Открываем confirm-модалку (если вдруг не открыта) и делаем refresh
+        if (modalType !== 'confirm') {
+          setModalType('confirm');
+        }
+        tryRefreshAndEnter('deeplink');
+      }
+    };
+
+    const sub = Linking.addEventListener('url', onUrl);
+
+    // Также обработаем cold start (если приложение открыли диплинком)
+    (async () => {
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        if (initialUrl && initialUrl.startsWith('holdyou://confirmed')) {
+          if (modalType !== 'confirm') {
+            setModalType('confirm');
+          }
+          tryRefreshAndEnter('deeplink');
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
+
+    return () => {
+      sub.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalType]);
+
+  // 2) Когда пользователь вернулся из почты/браузера в приложение — пробуем refresh автоматически
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      const prev = appStateRef.current;
+      appStateRef.current = nextState;
+
+      // только переход background/inactive -> active
+      if ((prev === 'background' || prev === 'inactive') && nextState === 'active') {
+        // Если пользователь в процессе подтверждения — авто-проверка
+        if (modalType === 'confirm') {
+          tryRefreshAndEnter('resume');
+        }
+      }
+    });
+
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalType]);
+
+  // =========================
 
   const handleAppleSignIn = () => {
     console.log('Apple sign-in pressed');
@@ -159,15 +264,15 @@ export default function Login() {
         confirmed_at?: string | null;
       } | null;
 
-      const confirmed = Boolean(anyUser?.email_confirmed_at || anyUser?.confirmed_at);
+      const confirmed = Boolean(
+        anyUser?.email_confirmed_at || anyUser?.confirmed_at
+      );
 
       if (!confirmed) {
         setPendingEmail(email);
 
-        try {
-          await logout();
-        } catch {}
-
+        // ✅ ВАЖНО: НЕ делаем logout() здесь!
+        // Иначе кнопка “I’ve confirmed” не сможет refreshUser() и проверить статус.
         setModalType('confirm');
         return;
       }
@@ -252,33 +357,25 @@ export default function Login() {
     setActionLoading(true);
 
     try {
-      if (isAuthenticated) {
-        const u = await refreshUser();
-        const anyUser = u as unknown as {
-          email_confirmed_at?: string | null;
-          confirmed_at?: string | null;
-        } | null;
+      const u = await refreshUser();
 
-        const confirmed = Boolean(anyUser?.email_confirmed_at || anyUser?.confirmed_at);
+      const anyUser = u as unknown as {
+        email_confirmed_at?: string | null;
+        confirmed_at?: string | null;
+      } | null;
 
-        if (confirmed) {
-          setModalType('none');
-          router.replace('/(tabs)/talk');
-          return;
-        }
+      const confirmed = Boolean(
+        anyUser?.email_confirmed_at || anyUser?.confirmed_at
+      );
 
-        try {
-          await logout();
-        } catch {}
-        setErrorMessage('Email is not confirmed yet. Please check your inbox.');
-        setModalType('confirm');
+      if (confirmed) {
+        setModalType('none');
+        router.replace('/(tabs)/talk');
         return;
       }
 
-      if (pendingEmail) {
-        setLoginEmail(pendingEmail);
-      }
-      setModalType('login');
+      setErrorMessage('Email is not confirmed yet. Please check your inbox.');
+      setModalType('confirm');
     } catch (error: unknown) {
       const message =
         (error as { message?: string })?.message ??
