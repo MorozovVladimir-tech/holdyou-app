@@ -11,8 +11,15 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.takeda1101.holdyou",
+      "buildNumber": "3",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "holdyou",
+            "CFBundleURLSchemes": ["holdyou"]
+          }
+        ]
       }
     },
     "android": {
