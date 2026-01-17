@@ -37,29 +37,8 @@ export default function ResetPasswordScreen() {
   const canSave =
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
-  // ✅ Принимаем оба формата:
-  // - старый: holdyou://reset-password?... (host = reset-password)
-  // - новый:  holdyou:///auth/reset-password?... (path = /auth/reset-password)
-  const isResetPasswordDeepLink = (url: string) => {
-    if (!url) return false;
-    const u = url.toLowerCase();
-
-    // общий safe-check на scheme
-    if (!u.startsWith('holdyou://')) return false;
-
-    // старый формат
-    if (u.startsWith('holdyou://reset-password')) return true;
-
-    // новый формат (тройной слэш / путь)
-    // варианты которые реально приходят: holdyou:///auth/reset-password, holdyou://auth/reset-password
-    if (u.includes('://') && u.includes('/auth/reset-password')) return true;
-
-    return false;
-  };
-
-  // ВАЖНО: строим "https callback", чтобы supabase-js смог распарсить code/hash
   const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    // Берём ВСЁ после "?" (это наш payload, туда мы с веба кладём query+hash)
+    // incomingUrl: holdyou://auth/reset-password?... (или без ?)
     const qIndex = incomingUrl.indexOf('?');
     const rawAfterQ = qIndex >= 0 ? incomingUrl.slice(qIndex + 1) : '';
 
@@ -74,13 +53,11 @@ export default function ResetPasswordScreen() {
 
     if (!decoded) return base;
 
-    // Если decoded уже содержит '#...' — формируем как hash
     if (decoded.includes('#')) {
       const cleaned = decoded.replace(/^#/, '');
       return `${base}#${cleaned}`;
     }
 
-    // Иначе считаем, что это query string
     return `${base}?${decoded.replace(/^\?/, '')}`;
   };
 
@@ -112,10 +89,9 @@ export default function ResetPasswordScreen() {
     }
   };
 
-  // Слушаем deep link + cold start
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      if (isResetPasswordDeepLink(url)) {
+      if (url.startsWith('holdyou://auth/reset-password')) {
         setPhase('boot');
         handleIncomingResetLink(url);
       }
@@ -126,14 +102,11 @@ export default function ResetPasswordScreen() {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
-
-        if (initialUrl && isResetPasswordDeepLink(initialUrl)) {
+        if (initialUrl && initialUrl.startsWith('holdyou://auth/reset-password')) {
           await handleIncomingResetLink(initialUrl);
           return;
         }
 
-        // Экран открыт вручную без диплинка — покажем форму,
-        // но updateUser может не сработать без recovery session (это ок, покажем ошибку).
         setPhase('ready');
       } catch {
         setPhase('ready');
@@ -141,7 +114,6 @@ export default function ResetPasswordScreen() {
     })();
 
     return () => sub.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSave = async () => {
@@ -292,10 +264,7 @@ export default function ResetPasswordScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
+  screen: { flex: 1, backgroundColor: '#000000' },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.85)',
@@ -334,16 +303,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 14,
   },
-
-  inputGroup: {
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#FFFFFF',
-    marginBottom: 6,
-  },
+  inputGroup: { marginBottom: 16 },
+  inputLabel: { fontSize: 14, fontWeight: '500', color: '#FFFFFF', marginBottom: 6 },
   inputField: {
     borderRadius: 4,
     borderWidth: 0.5,
@@ -355,18 +316,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  helperText: {
-    marginTop: 6,
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#FFFFFF',
-    opacity: 0.7,
-  },
-  helperTextError: {
-    color: '#ff6b6b',
-    opacity: 1,
-  },
-
+  helperText: { marginTop: 6, fontSize: 12, fontWeight: '500', color: '#FFFFFF', opacity: 0.7 },
+  helperTextError: { color: '#ff6b6b', opacity: 1 },
   modalPrimaryButton: {
     marginTop: 8,
     height: 38,
@@ -381,11 +332,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 20,
   },
-  modalPrimaryText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#FFFFFF',
-  },
+  modalPrimaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
   modalSecondaryButton: {
     marginTop: 12,
     height: 38,
@@ -396,44 +343,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalSecondaryText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#FFFFFF',
-  },
-
-  pressed: {
-    opacity: 0.8,
-  },
-
-  errorText: {
-    marginTop: 14,
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#ff6b6b',
-    textAlign: 'center',
-  },
-
-  centerRow: {
-    marginTop: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  loadingText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#FFFFFF',
-    opacity: 0.8,
-  },
-
-  doneHint: {
-    marginTop: 10,
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#FFFFFF',
-    opacity: 0.7,
-    textAlign: 'center',
-  },
+  modalSecondaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
+  pressed: { opacity: 0.8 },
+  errorText: { marginTop: 14, fontSize: 12, fontWeight: '500', color: '#ff6b6b', textAlign: 'center' },
+  centerRow: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  loadingText: { fontSize: 13, fontWeight: '500', color: '#FFFFFF', opacity: 0.8 },
+  doneHint: { marginTop: 10, fontSize: 12, fontWeight: '500', color: '#FFFFFF', opacity: 0.7, textAlign: 'center' },
 });
