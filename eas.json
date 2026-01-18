@@ -13,7 +13,9 @@
     },
     "production": {
       "distribution": "store",
-      "autoIncrement": true
+      "ios": {
+        "autoIncrement": true
+      }
     }
   },
   "submit": {
