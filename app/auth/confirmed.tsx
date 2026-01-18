@@ -1,7 +1,7 @@
 // app/auth/confirmed.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { View, Text, Pressable, StyleSheet, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
 
@@ -11,101 +11,41 @@ export default function ConfirmedScreen() {
   const [phase, setPhase] = useState<Phase>('boot');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const isBoot = phase === 'boot';
-  const isDone = phase === 'done';
-
-  const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    // incomingUrl: holdyou://auth/confirmed?... (или без ?)
-    const qIndex = incomingUrl.indexOf('?');
-    const rawAfterQ = qIndex >= 0 ? incomingUrl.slice(qIndex + 1) : '';
-
-    let decoded = rawAfterQ;
-    try {
-      decoded = decodeURIComponent(rawAfterQ);
-    } catch {
-      // ignore
-    }
-
-    const base = 'https://holdyou.app/confirmed';
-
-    if (!decoded) return base;
-
-    if (decoded.includes('#')) {
-      const cleaned = decoded.replace(/^#/, '');
-      return `${base}#${cleaned}`;
-    }
-
-    return `${base}?${decoded.replace(/^\?/, '')}`;
-  };
-
-  const handleIncomingConfirmedLink = async (url: string) => {
-    setErrorMessage(null);
-
-    try {
-      const callbackUrl = buildCallbackUrlForSupabase(url);
-
-      const { error } = await supabase.auth.exchangeCodeForSession(callbackUrl);
-
-      if (error) {
-        console.log('exchangeCodeForSession error', error);
-        setPhase('error');
-        setErrorMessage(error.message || 'Could not confirm session. Please open the link again.');
-        return;
-      }
-
-      setPhase('done');
-
-      setTimeout(() => {
-        router.replace('/(tabs)/talk');
-      }, 400);
-    } catch (e: any) {
-      console.log('handleIncomingConfirmedLink unexpected error', e);
-      setPhase('error');
-      setErrorMessage(e?.message || 'Could not process confirmation link. Please try again.');
-    }
-  };
-
   useEffect(() => {
-    const onUrl = ({ url }: { url: string }) => {
-      if (url.startsWith('holdyou://auth/confirmed')) {
-        setPhase('boot');
-        handleIncomingConfirmedLink(url);
-      }
-    };
-
-    const sub = Linking.addEventListener('url', onUrl);
+    let isMounted = true;
 
     (async () => {
       try {
-        const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && initialUrl.startsWith('holdyou://auth/confirmed')) {
-          await handleIncomingConfirmedLink(initialUrl);
-          return;
-        }
+        // после подтверждения на вебе — просим Supabase обновить сессию/юзера
+        await supabase.auth.refreshSession();
 
-        // если открыли экран руками — просто пойдём в приложение
+        if (!isMounted) return;
         setPhase('done');
-        setTimeout(() => router.replace('/(tabs)/talk'), 300);
-      } catch {
-        setPhase('done');
-        setTimeout(() => router.replace('/(tabs)/talk'), 300);
+
+        // уводим внутрь
+        setTimeout(() => {
+          router.replace('/(tabs)/talk');
+        }, 250);
+      } catch (e: any) {
+        if (!isMounted) return;
+        setPhase('error');
+        setErrorMessage(e?.message || 'Could not refresh session. Please try again.');
       }
     })();
 
-    return () => sub.remove();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const titleText = useMemo(() => {
-    if (isBoot) return 'Confirming...';
-    if (isDone) return 'Confirmed ✅';
-    return 'Confirmation';
-  }, [isBoot, isDone]);
-
-  const subtitleText = useMemo(() => {
-    if (isBoot) return 'Signing you in securely...';
-    if (isDone) return 'Redirecting you into the app…';
-    return 'Something went wrong.';
-  }, [isBoot, isDone]);
+  const titleText =
+    phase === 'boot' ? 'Confirming...' : phase === 'done' ? 'Confirmed ✅' : 'Confirmation';
+  const subtitleText =
+    phase === 'boot'
+      ? 'Signing you in securely...'
+      : phase === 'done'
+      ? 'Redirecting you into the app…'
+      : 'Something went wrong.';
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -114,31 +54,15 @@ export default function ConfirmedScreen() {
           <Text style={styles.modalTitle}>{titleText}</Text>
           <Text style={styles.subtitle}>{subtitleText}</Text>
 
-          {isBoot && (
+          {phase === 'boot' && (
             <View style={styles.centerRow}>
               <ActivityIndicator size="small" color="#00B8D9" />
               <Text style={styles.loadingText}>Loading...</Text>
             </View>
           )}
 
-          {errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
-
-          {!isBoot && !isDone && (
-            <Pressable
-              onPress={() => router.replace('/(tabs)/talk')}
-              style={({ pressed }) => [styles.modalPrimaryButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.modalPrimaryText}>Open app</Text>
-            </Pressable>
-          )}
-
-          {phase === 'error' && (
-            <Pressable
-              onPress={() => router.replace('/(tabs)/talk')}
-              style={({ pressed }) => [styles.modalSecondaryButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.modalSecondaryText}>Back</Text>
-            </Pressable>
+          {phase === 'error' && !!errorMessage && (
+            <Text style={styles.errorText}>{errorMessage}</Text>
           )}
         </View>
       </View>
@@ -167,7 +91,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 20,
-    minHeight: 260,
+    minHeight: 240,
     justifyContent: 'center',
   },
   modalTitle: {
@@ -199,33 +123,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     opacity: 0.8,
   },
-  modalPrimaryButton: {
-    marginTop: 8,
-    height: 38,
-    borderRadius: 6,
-    borderWidth: 0.5,
-    borderColor: '#00B8D9',
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#00B8D9',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-  },
-  modalPrimaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
-  modalSecondaryButton: {
-    marginTop: 12,
-    height: 38,
-    borderRadius: 6,
-    borderWidth: 0.5,
-    borderColor: '#00B8D9',
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSecondaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
-  pressed: { opacity: 0.8 },
   errorText: {
     marginTop: 14,
     fontSize: 12,
