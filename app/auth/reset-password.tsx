@@ -37,8 +37,13 @@ export default function ResetPasswordScreen() {
   const canSave =
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
+  const isResetLink = (url: string) =>
+    url.startsWith('holdyou:///auth/reset-password') ||
+    url.startsWith('holdyou://auth/reset-password');
+
   const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    // incomingUrl: holdyou://auth/reset-password?... (или без ?)
+    // incomingUrl: holdyou:///auth/reset-password?<ENCODED_PAYLOAD>
+    // где payload = encodeURIComponent("qs&qs&hash")
     const qIndex = incomingUrl.indexOf('?');
     const rawAfterQ = qIndex >= 0 ? incomingUrl.slice(qIndex + 1) : '';
 
@@ -53,16 +58,28 @@ export default function ResetPasswordScreen() {
 
     if (!decoded) return base;
 
-    if (decoded.includes('#')) {
+    // если внутри decoded есть access_token/refresh_token и т.п. из hash,
+    // мы храним это как "access_token=...&refresh_token=...&type=recovery"
+    // и приклеиваем через #
+    if (decoded.includes('access_token=') || decoded.includes('refresh_token=') || decoded.includes('type=recovery')) {
+      // если decoded вдруг начинается с # — очистим
       const cleaned = decoded.replace(/^#/, '');
       return `${base}#${cleaned}`;
     }
 
+    // иначе это обычный query типа code=...
     return `${base}?${decoded.replace(/^\?/, '')}`;
   };
 
   const handleIncomingResetLink = async (url: string) => {
     setErrorMessage(null);
+
+    // если пришёл пустой диплинк без payload — это бесполезно
+    if (!url.includes('?')) {
+      setPhase('error');
+      setErrorMessage('Recovery link is missing. Please open the password reset email again.');
+      return;
+    }
 
     try {
       const callbackUrl = buildCallbackUrlForSupabase(url);
@@ -91,7 +108,7 @@ export default function ResetPasswordScreen() {
 
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      if (url.startsWith('holdyou://auth/reset-password')) {
+      if (isResetLink(url)) {
         setPhase('boot');
         handleIncomingResetLink(url);
       }
@@ -102,14 +119,17 @@ export default function ResetPasswordScreen() {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && initialUrl.startsWith('holdyou://auth/reset-password')) {
+        if (initialUrl && isResetLink(initialUrl)) {
           await handleIncomingResetLink(initialUrl);
           return;
         }
 
-        setPhase('ready');
+        // Если попали сюда без диплинка — это ошибка сценария
+        setPhase('error');
+        setErrorMessage('Open this screen only from the password reset email link.');
       } catch {
-        setPhase('ready');
+        setPhase('error');
+        setErrorMessage('Open this screen only from the password reset email link.');
       }
     })();
 
@@ -181,7 +201,7 @@ export default function ResetPasswordScreen() {
             </View>
           )}
 
-          {!isBoot && !isDone && (
+          {!isBoot && !isDone && phase === 'ready' && (
             <>
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>New password</Text>
