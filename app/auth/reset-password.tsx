@@ -13,7 +13,7 @@ import {
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
 
-type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error';
+type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error' | 'needs_link';
 
 export default function ResetPasswordScreen() {
   const [phase, setPhase] = useState<Phase>('boot');
@@ -27,6 +27,7 @@ export default function ResetPasswordScreen() {
   const isBoot = phase === 'boot';
   const isSaving = phase === 'saving';
   const isDone = phase === 'done';
+  const needsLink = phase === 'needs_link';
 
   const passwordsMismatch =
     confirmPassword.length > 0 && newPassword !== confirmPassword;
@@ -37,15 +38,27 @@ export default function ResetPasswordScreen() {
   const canSave =
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
-  const isResetLink = (url: string) =>
-    url.startsWith('holdyou:///auth/reset-password') ||
-    url.startsWith('holdyou://auth/reset-password');
+  const normalizeHoldYouUrl = (url: string) => {
+    // приводим holdyou:///auth/... -> holdyou://auth/...
+    if (url.startsWith('holdyou:///')) return url.replace('holdyou:///', 'holdyou://');
+    // на всякий случай: holdyou:/auth/... -> holdyou://auth/...
+    if (url.startsWith('holdyou:/') && !url.startsWith('holdyou://')) {
+      return url.replace('holdyou:/', 'holdyou://');
+    }
+    return url;
+  };
+
+  const isResetDeepLink = (url: string) => {
+    const u = normalizeHoldYouUrl(url);
+    return u.startsWith('holdyou://auth/reset-password');
+  };
 
   const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    // incomingUrl: holdyou:///auth/reset-password?<ENCODED_PAYLOAD>
-    // где payload = encodeURIComponent("qs&qs&hash")
-    const qIndex = incomingUrl.indexOf('?');
-    const rawAfterQ = qIndex >= 0 ? incomingUrl.slice(qIndex + 1) : '';
+    const normalized = normalizeHoldYouUrl(incomingUrl);
+
+    // incomingUrl: holdyou://auth/reset-password?ENCODED_PAYLOAD
+    const qIndex = normalized.indexOf('?');
+    const rawAfterQ = qIndex >= 0 ? normalized.slice(qIndex + 1) : '';
 
     let decoded = rawAfterQ;
     try {
@@ -58,28 +71,16 @@ export default function ResetPasswordScreen() {
 
     if (!decoded) return base;
 
-    // если внутри decoded есть access_token/refresh_token и т.п. из hash,
-    // мы храним это как "access_token=...&refresh_token=...&type=recovery"
-    // и приклеиваем через #
-    if (decoded.includes('access_token=') || decoded.includes('refresh_token=') || decoded.includes('type=recovery')) {
-      // если decoded вдруг начинается с # — очистим
+    if (decoded.includes('#')) {
       const cleaned = decoded.replace(/^#/, '');
       return `${base}#${cleaned}`;
     }
 
-    // иначе это обычный query типа code=...
     return `${base}?${decoded.replace(/^\?/, '')}`;
   };
 
   const handleIncomingResetLink = async (url: string) => {
     setErrorMessage(null);
-
-    // если пришёл пустой диплинк без payload — это бесполезно
-    if (!url.includes('?')) {
-      setPhase('error');
-      setErrorMessage('Recovery link is missing. Please open the password reset email again.');
-      return;
-    }
 
     try {
       const callbackUrl = buildCallbackUrlForSupabase(url);
@@ -108,7 +109,7 @@ export default function ResetPasswordScreen() {
 
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      if (isResetLink(url)) {
+      if (isResetDeepLink(url)) {
         setPhase('boot');
         handleIncomingResetLink(url);
       }
@@ -119,16 +120,17 @@ export default function ResetPasswordScreen() {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && isResetLink(initialUrl)) {
+
+        if (initialUrl && isResetDeepLink(initialUrl)) {
           await handleIncomingResetLink(initialUrl);
           return;
         }
 
-        // Если попали сюда без диплинка — это ошибка сценария
-        setPhase('error');
+        // Если открыли экран без токена — НЕ показываем форму (иначе будет Auth session missing)
+        setPhase('needs_link');
         setErrorMessage('Open this screen only from the password reset email link.');
       } catch {
-        setPhase('error');
+        setPhase('needs_link');
         setErrorMessage('Open this screen only from the password reset email link.');
       }
     })();
@@ -178,14 +180,16 @@ export default function ResetPasswordScreen() {
   const titleText = useMemo(() => {
     if (isBoot) return 'Preparing reset...';
     if (isDone) return 'Saved ✅';
+    if (needsLink) return 'Set a new password';
     return 'Set a new password';
-  }, [isBoot, isDone]);
+  }, [isBoot, isDone, needsLink]);
 
   const subtitleText = useMemo(() => {
     if (isBoot) return 'Opening secure recovery session...';
     if (isDone) return 'Your password has been updated.';
+    if (needsLink) return 'Enter a new password and confirm it.';
     return 'Enter a new password and confirm it.';
-  }, [isBoot, isDone]);
+  }, [isBoot, isDone, needsLink]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -201,6 +205,7 @@ export default function ResetPasswordScreen() {
             </View>
           )}
 
+          {/* Показываем форму ТОЛЬКО если есть сессия (phase === ready / saving) */}
           {!isBoot && !isDone && phase === 'ready' && (
             <>
               <View style={styles.inputGroup}>
