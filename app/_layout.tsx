@@ -30,6 +30,10 @@ export const unstable_settings = {
 /**
  * Компонент, который живёт ВНУТРИ AuthProvider,
  * поэтому может вызывать useAuth() и решать редиректы после deep link.
+ *
+ * ВАЖНО:
+ * - Reset password deep link обрабатывается экраном app/auth/reset-password.tsx напрямую,
+ *   чтобы не терять payload (?code=... или #access_token=...).
  */
 function DeepLinkGate() {
   const router = useRouter();
@@ -38,51 +42,42 @@ function DeepLinkGate() {
   const handleIncomingUrl = async (url: string | null) => {
     if (!url) return;
 
-    // Пример URL:
-    // https://holdyou.app/confirmed?...
-    // https://holdyou.app/auth/reset-password?...
     const parsed = Linking.parse(url);
-    const path = (parsed.path || '').replace(/^\/+/, ''); // убираем ведущие "/"
+    const path = (parsed.path || '').replace(/^\/+/, '');
     const lowerPath = path.toLowerCase();
 
     // 1) После подтверждения email на сайте: /confirmed
     if (lowerPath.startsWith('confirmed')) {
       try {
-        // обновим user из Supabase (важно!)
         await refreshUser();
-      } catch (e) {
-        // даже если refreshUser упал — всё равно отправим на логин
+      } catch {
+        // ignore
       }
 
-      // Дальше: логика “куда вести” уже решается в Login (useEffect: если confirmed -> /(tabs)/talk)
-      // Поэтому просто пнём в onboarding/login
       router.replace('/onboarding/login' as any);
       return;
     }
 
-    // 2) Reset password: /auth/reset-password
+    // 2) Reset password: НЕ трогаем здесь.
+    // Он должен обработаться внутри app/auth/reset-password.tsx,
+    // иначе теряется query/hash payload и ломается exchangeCodeForSession.
     if (lowerPath.startsWith('auth/reset-password')) {
-      // Важно: у тебя должен быть экран app/auth/reset-password.tsx (или в папке auth)
-      router.replace('/auth/reset-password' as any);
       return;
     }
 
-    // Если пришло что-то другое — пока игнорим
+    // Остальное — игнорим
   };
 
   useEffect(() => {
-    // initial URL (когда приложение было закрыто и открыли по ссылке)
     Linking.getInitialURL().then((url) => {
       handleIncomingUrl(url);
     });
 
-    // runtime URL (когда приложение открыто/в фоне и прилетает ссылка)
     const sub = Linking.addEventListener('url', ({ url }) => {
       handleIncomingUrl(url);
     });
 
     return () => {
-      // в твоей версии expo-linking именно remove()
       sub.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,7 +95,6 @@ export default function RootLayout() {
         <TalkProvider>
           <SubscriptionProvider>
             <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-              {/* DeepLink handler живёт внутри провайдеров */}
               <DeepLinkGate />
 
               <Stack initialRouteName="onboarding">
