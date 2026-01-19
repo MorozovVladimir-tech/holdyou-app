@@ -8,10 +8,10 @@
     "scheme": "holdyou",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.takeda1101.holdyou",
+      "associatedDomains": ["applinks:holdyou.app"],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "CFBundleURLTypes": [
@@ -22,7 +22,6 @@
         ]
       }
     },
-
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -34,12 +33,10 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.takeda1101.app"
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -57,19 +54,16 @@
       "expo-font",
       "expo-web-browser"
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-
     "extra": {
       "router": {},
       "eas": {
         "projectId": "334b8044-f25c-4b92-8e8a-788a8dbad64b"
       }
     },
-
     "owner": "takeda1101"
   }
 }
