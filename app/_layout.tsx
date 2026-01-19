@@ -13,7 +13,6 @@ import { SenderProvider } from './context/SenderContext';
 import { TalkProvider } from './context/TalkContext';
 import { SubscriptionProvider } from './context/SubscriptionContext';
 
-// Configure notification handler once at app startup
 Notifications.setNotificationHandler({
   handleNotification: async () =>
     ({
@@ -27,14 +26,6 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-/**
- * Компонент, который живёт ВНУТРИ AuthProvider,
- * поэтому может вызывать useAuth() и решать редиректы после deep link.
- *
- * ВАЖНО:
- * - Reset password deep link обрабатывается экраном app/auth/reset-password.tsx напрямую,
- *   чтобы не терять payload (?code=... или #access_token=...).
- */
 function DeepLinkGate() {
   const router = useRouter();
   const { refreshUser } = useAuth();
@@ -46,40 +37,28 @@ function DeepLinkGate() {
     const path = (parsed.path || '').replace(/^\/+/, '');
     const lowerPath = path.toLowerCase();
 
-    // 1) После подтверждения email на сайте: /confirmed
+    // confirmed оставляем (но только для runtime событий)
     if (lowerPath.startsWith('confirmed')) {
       try {
         await refreshUser();
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       router.replace('/onboarding/login' as any);
       return;
     }
 
-    // 2) Reset password: НЕ трогаем здесь.
-    // Он должен обработаться внутри app/auth/reset-password.tsx,
-    // иначе теряется query/hash payload и ломается exchangeCodeForSession.
-    if (lowerPath.startsWith('auth/reset-password')) {
-      return;
-    }
-
-    // Остальное — игнорим
+    // reset-password здесь НЕ обрабатываем вообще
+    // и главное — НЕ трогаем initialURL в этом компоненте
   };
 
   useEffect(() => {
-    Linking.getInitialURL().then((url) => {
-      handleIncomingUrl(url);
-    });
-
+    // ❗️ВАЖНО: НЕ вызываем Linking.getInitialURL() здесь,
+    // чтобы не "съесть" initialURL у экранов reset-password / confirmed.
     const sub = Linking.addEventListener('url', ({ url }) => {
       handleIncomingUrl(url);
     });
 
-    return () => {
-      sub.remove();
-    };
+    return () => sub.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
