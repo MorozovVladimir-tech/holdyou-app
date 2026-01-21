@@ -28,6 +28,7 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="app"/>
         <data android:scheme="exp+app"/>
+        <data android:scheme="holdyou"/>
       </intent-filter>
     </activity>
   </application>

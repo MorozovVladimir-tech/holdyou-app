@@ -152,9 +152,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    // ⚠️ этот URL ДОЛЖЕН существовать на сайте (Next.js).
-    // Сейчас у тебя такого роута ещё нет — мы создадим:
-    // holdyou-web/app/auth/reset-password/page.tsx
+    // ✅ Цепочка 2: письмо → Supabase verify → веб-страница → автоматический переход в приложение
+    // Веб-страница обрабатывает редирект и открывает приложение через deep link
     const redirectTo = 'https://holdyou.app/auth/reset-password';
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {

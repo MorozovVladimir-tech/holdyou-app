@@ -10,12 +10,61 @@ import {
   ActivityIndicator,
   Linking,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
 
-type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error' | 'needs_link';
+type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error';
+
+type Params = {
+  code?: string;
+  access_token?: string;
+  refresh_token?: string;
+  type?: string;
+};
+
+function parseTokensFromUrl(url: string): {
+  access_token?: string;
+  refresh_token?: string;
+  type?: string;
+  code?: string;
+} {
+  // url can be:
+  // holdyou://auth/reset-password?access_token=...&refresh_token=...&type=recovery
+  // https://holdyou.app/auth/reset-password#access_token=...&refresh_token=...&type=recovery
+  // https://holdyou.app/auth/reset-password?code=...
+
+  const out: any = {};
+
+  try {
+    const qIndex = url.indexOf('?');
+    if (qIndex !== -1) {
+      const query = url.slice(qIndex + 1).split('#')[0];
+      const p = new URLSearchParams(query);
+      out.code = p.get('code') ?? undefined;
+      out.access_token = p.get('access_token') ?? undefined;
+      out.refresh_token = p.get('refresh_token') ?? undefined;
+      out.type = p.get('type') ?? undefined;
+    }
+
+    const hashIndex = url.indexOf('#');
+    if (hashIndex !== -1) {
+      const hash = url.slice(hashIndex + 1);
+      const p = new URLSearchParams(hash);
+      out.access_token = out.access_token ?? (p.get('access_token') ?? undefined);
+      out.refresh_token = out.refresh_token ?? (p.get('refresh_token') ?? undefined);
+      out.type = out.type ?? (p.get('type') ?? undefined);
+      out.code = out.code ?? (p.get('code') ?? undefined);
+    }
+  } catch {
+    // ignore
+  }
+
+  return out;
+}
 
 export default function ResetPasswordScreen() {
+  const params = useLocalSearchParams<Params>();
+
   const [phase, setPhase] = useState<Phase>('boot');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -27,117 +76,110 @@ export default function ResetPasswordScreen() {
   const isBoot = phase === 'boot';
   const isSaving = phase === 'saving';
   const isDone = phase === 'done';
-  const needsLink = phase === 'needs_link';
 
   const passwordsMismatch =
     confirmPassword.length > 0 && newPassword !== confirmPassword;
 
-  const passwordTooShort =
-    newPassword.length > 0 && newPassword.length < MIN_PASSWORD_LEN;
-
   const canSave =
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
-  const normalizeHoldYouUrl = (url: string) => {
-    // приводим holdyou:///auth/... -> holdyou://auth/...
-    if (url.startsWith('holdyou:///')) return url.replace('holdyou:///', 'holdyou://');
-    // на всякий случай: holdyou:/auth/... -> holdyou://auth/...
-    if (url.startsWith('holdyou:/') && !url.startsWith('holdyou://')) {
-      return url.replace('holdyou:/', 'holdyou://');
-    }
-    return url;
-  };
-
-  const isResetDeepLink = (url: string) => {
-    const u = normalizeHoldYouUrl(url);
-    return u.startsWith('holdyou://auth/reset-password');
-  };
-
-  const buildCallbackUrlForSupabase = (incomingUrl: string) => {
-    const normalized = normalizeHoldYouUrl(incomingUrl);
-
-    // incomingUrl: holdyou://auth/reset-password?ENCODED_PAYLOAD
-    const qIndex = normalized.indexOf('?');
-    const rawAfterQ = qIndex >= 0 ? normalized.slice(qIndex + 1) : '';
-
-    let decoded = rawAfterQ;
-    try {
-      decoded = decodeURIComponent(rawAfterQ);
-    } catch {
-      // ignore
-    }
-
-    const base = 'https://holdyou.app/auth/reset-password';
-
-    if (!decoded) return base;
-
-    if (decoded.includes('#')) {
-      const cleaned = decoded.replace(/^#/, '');
-      return `${base}#${cleaned}`;
-    }
-
-    return `${base}?${decoded.replace(/^\?/, '')}`;
-  };
-
-  const handleIncomingResetLink = async (url: string) => {
+  async function openRecoverySession(payload: {
+    access_token?: string;
+    refresh_token?: string;
+    type?: string;
+    code?: string;
+  }) {
+    setPhase('boot');
     setErrorMessage(null);
 
-    try {
-      const callbackUrl = buildCallbackUrlForSupabase(url);
+    const { access_token, refresh_token, type, code } = payload;
 
-      const { error } = await supabase.auth.exchangeCodeForSession(callbackUrl);
+    console.log('=== APP: reset payload ===');
+    console.log({ access_token: !!access_token, refresh_token: !!refresh_token, type, code: !!code });
+    console.log('=========================');
+
+    // ✅ MAIN PATH: tokens
+    if (access_token && refresh_token) {
+      const { error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token,
+      });
+
+      if (error) {
+        console.log('setSession error', error);
+        setPhase('error');
+        setErrorMessage(error.message || 'Could not open recovery session.');
+        return;
+      }
+
+      setPhase('ready');
+      return;
+    }
+
+    // ⚠️ FALLBACK: code (often fails in your scenario)
+    if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
 
       if (error) {
         console.log('exchangeCodeForSession error', error);
         setPhase('error');
         setErrorMessage(
           error.message ||
-            'Could not open recovery session. Please open the link again.'
+            'Could not open recovery session. (Likely missing PKCE flow state)'
         );
         return;
       }
 
       setPhase('ready');
-    } catch (e: any) {
-      console.log('handleIncomingResetLink unexpected error', e);
-      setPhase('error');
-      setErrorMessage(
-        e?.message || 'Could not process recovery link. Please try again.'
-      );
+      return;
     }
-  };
 
+    setPhase('error');
+    setErrorMessage(
+      'Recovery link did not include tokens. Make sure your web page forwards access_token + refresh_token into the app.'
+    );
+  }
+
+  // 1) Expo Router params (when deep link is opened and router got query)
+  useEffect(() => {
+    const access_token = typeof params?.access_token === 'string' ? params.access_token : undefined;
+    const refresh_token = typeof params?.refresh_token === 'string' ? params.refresh_token : undefined;
+    const type = typeof params?.type === 'string' ? params.type : undefined;
+    const code = typeof params?.code === 'string' ? params.code : undefined;
+
+    if (access_token || refresh_token || code) {
+      openRecoverySession({ access_token, refresh_token, type, code });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.access_token, params?.refresh_token, params?.type, params?.code]);
+
+  // 2) Linking fallback (getInitialURL + runtime URL events)
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      if (isResetDeepLink(url)) {
-        setPhase('boot');
-        handleIncomingResetLink(url);
-      }
+      console.log('=== APP: onUrl ===');
+      console.log('url:', url);
+      console.log('=============');
+
+      const parsed = parseTokensFromUrl(url);
+      openRecoverySession(parsed);
     };
 
     const sub = Linking.addEventListener('url', onUrl);
 
     (async () => {
-      try {
-        const initialUrl = await Linking.getInitialURL();
+      const initialUrl = await Linking.getInitialURL();
+      console.log('=== APP: getInitialURL ===');
+      console.log('initialUrl:', initialUrl);
+      console.log('========================');
 
-        if (initialUrl && isResetDeepLink(initialUrl)) {
-          await handleIncomingResetLink(initialUrl);
-          return;
-        }
-
-        // Если открыли экран без токена — НЕ показываем форму (иначе будет Auth session missing)
-        setPhase('needs_link');
-        setErrorMessage('Open this screen only from the password reset email link.');
-      } catch {
-        setPhase('needs_link');
-        setErrorMessage('Open this screen only from the password reset email link.');
-      }
+      if (initialUrl) onUrl({ url: initialUrl });
     })();
 
     return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // SAVE PASSWORD
   const handleSave = async () => {
     setErrorMessage(null);
 
@@ -153,43 +195,35 @@ export default function ResetPasswordScreen() {
 
     setPhase('saving');
 
-    try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
 
-      if (error) {
-        console.log('updateUser password error', error);
-        setPhase('error');
-        setErrorMessage(error.message || 'Failed to update password.');
-        return;
-      }
-
-      setPhase('done');
-
-      setTimeout(() => {
-        router.replace('/(tabs)/talk');
-      }, 600);
-    } catch (e: any) {
-      console.log('update password unexpected error', e);
+    if (error) {
+      console.log('updateUser password error', error);
       setPhase('error');
-      setErrorMessage(e?.message || 'Failed to update password.');
+      setErrorMessage(error.message || 'Failed to update password.');
+      return;
     }
+
+    setPhase('done');
+
+    setTimeout(() => {
+      router.replace('/(tabs)/talk');
+    }, 600);
   };
 
   const titleText = useMemo(() => {
     if (isBoot) return 'Preparing reset...';
     if (isDone) return 'Saved ✅';
-    if (needsLink) return 'Set a new password';
     return 'Set a new password';
-  }, [isBoot, isDone, needsLink]);
+  }, [isBoot, isDone]);
 
   const subtitleText = useMemo(() => {
     if (isBoot) return 'Opening secure recovery session...';
     if (isDone) return 'Your password has been updated.';
-    if (needsLink) return 'Enter a new password and confirm it.';
     return 'Enter a new password and confirm it.';
-  }, [isBoot, isDone, needsLink]);
+  }, [isBoot, isDone]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -205,7 +239,6 @@ export default function ResetPasswordScreen() {
             </View>
           )}
 
-          {/* Показываем форму ТОЛЬКО если есть сессия (phase === ready / saving) */}
           {!isBoot && !isDone && phase === 'ready' && (
             <>
               <View style={styles.inputGroup}>
@@ -214,17 +247,9 @@ export default function ResetPasswordScreen() {
                   style={styles.inputField}
                   value={newPassword}
                   onChangeText={setNewPassword}
-                  placeholder="**********"
-                  placeholderTextColor="#4C4949"
                   secureTextEntry
-                  autoCapitalize="none"
                 />
-                <Text
-                  style={[
-                    styles.helperText,
-                    passwordTooShort && styles.helperTextError,
-                  ]}
-                >
+                <Text style={styles.helperText}>
                   At least {MIN_PASSWORD_LEN} characters
                 </Text>
               </View>
@@ -235,10 +260,7 @@ export default function ResetPasswordScreen() {
                   style={styles.inputField}
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
-                  placeholder="**********"
-                  placeholderTextColor="#4C4949"
                   secureTextEntry
-                  autoCapitalize="none"
                 />
                 {passwordsMismatch && (
                   <Text style={[styles.helperText, styles.helperTextError]}>
@@ -250,11 +272,7 @@ export default function ResetPasswordScreen() {
               <Pressable
                 onPress={handleSave}
                 disabled={!canSave || isSaving}
-                style={({ pressed }) => [
-                  styles.modalPrimaryButton,
-                  (pressed || isSaving) && styles.pressed,
-                  (!canSave || isSaving) && { opacity: 0.6 },
-                ]}
+                style={styles.modalPrimaryButton}
               >
                 {isSaving ? (
                   <ActivityIndicator size="small" color="#00B8D9" />
@@ -262,26 +280,10 @@ export default function ResetPasswordScreen() {
                   <Text style={styles.modalPrimaryText}>Save</Text>
                 )}
               </Pressable>
-
-              <Pressable
-                onPress={() => router.back()}
-                disabled={isSaving}
-                style={({ pressed }) => [
-                  styles.modalSecondaryButton,
-                  pressed && styles.pressed,
-                  isSaving && { opacity: 0.6 },
-                ]}
-              >
-                <Text style={styles.modalSecondaryText}>Back</Text>
-              </Pressable>
             </>
           )}
 
           {errorMessage && <Text style={styles.errorText}>{errorMessage}</Text>}
-
-          {isDone && (
-            <Text style={styles.doneHint}>Redirecting you into the app…</Text>
-          )}
         </View>
       </View>
     </SafeAreaView>
@@ -289,89 +291,41 @@ export default function ResetPasswordScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#000000' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
+  screen: { flex: 1, backgroundColor: '#000' },
+  modalBackdrop: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   modalCard: {
     width: 304,
+    padding: 24,
     borderRadius: 10,
     borderWidth: 0.5,
     borderColor: '#00B8D9',
-    backgroundColor: '#000000',
-    paddingHorizontal: 24,
-    paddingVertical: 32,
-    shadowColor: '#00B8D9',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    minHeight: 360,
-    justifyContent: 'center',
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '500',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
+  modalTitle: { color: '#fff', fontSize: 20, textAlign: 'center' },
   subtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    lineHeight: 18,
-    color: '#FFFFFF',
-    opacity: 0.82,
+    color: '#fff',
+    opacity: 0.8,
     textAlign: 'center',
-    marginBottom: 14,
+    marginBottom: 16,
   },
-  inputGroup: { marginBottom: 16 },
-  inputLabel: { fontSize: 14, fontWeight: '500', color: '#FFFFFF', marginBottom: 6 },
-  inputField: {
-    borderRadius: 4,
-    borderWidth: 0.5,
-    borderColor: '#00B8D9',
-    backgroundColor: '#AEACAC',
-    color: '#111111',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  helperText: { marginTop: 6, fontSize: 12, fontWeight: '500', color: '#FFFFFF', opacity: 0.7 },
-  helperTextError: { color: '#ff6b6b', opacity: 1 },
+  inputGroup: { marginBottom: 12 },
+  inputLabel: { color: '#fff', marginBottom: 4 },
+  inputField: { backgroundColor: '#AEACAC', padding: 10, borderRadius: 4 },
+  helperText: { color: '#ccc', fontSize: 12 },
+  helperTextError: { color: '#ff6b6b' },
   modalPrimaryButton: {
-    marginTop: 8,
-    height: 38,
-    borderRadius: 6,
-    borderWidth: 0.5,
-    borderColor: '#00B8D9',
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#00B8D9',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-  },
-  modalPrimaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
-  modalSecondaryButton: {
     marginTop: 12,
-    height: 38,
-    borderRadius: 6,
+    padding: 10,
     borderWidth: 0.5,
     borderColor: '#00B8D9',
-    backgroundColor: '#000000',
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  modalSecondaryText: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
-  pressed: { opacity: 0.8 },
-  errorText: { marginTop: 14, fontSize: 12, fontWeight: '500', color: '#ff6b6b', textAlign: 'center' },
-  centerRow: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-  loadingText: { fontSize: 13, fontWeight: '500', color: '#FFFFFF', opacity: 0.8 },
-  doneHint: { marginTop: 10, fontSize: 12, fontWeight: '500', color: '#FFFFFF', opacity: 0.7, textAlign: 'center' },
+  modalPrimaryText: { color: '#fff' },
+  errorText: { color: '#ff6b6b', textAlign: 'center', marginTop: 12 },
+  centerRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  loadingText: { color: '#fff' },
 });
