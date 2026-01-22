@@ -242,7 +242,7 @@ export default function ResetPasswordScreen() {
 
           {isDone && (
             <Pressable
-              onPress={() => router.replace('/onboarding/login' as any)}
+              onPress={() => router.replace('/onboarding/Login' as any)}
               style={styles.modalPrimaryButton}
             >
               <Text style={styles.modalPrimaryText}>Go to login</Text>

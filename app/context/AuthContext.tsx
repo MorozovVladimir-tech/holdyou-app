@@ -77,6 +77,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      // ловим любые изменения токенов/сессии
       setUser(session?.user ?? null);
     });
 
@@ -87,19 +88,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const refreshUser = async (): Promise<User | null> => {
-    // ✅ важно: после подтверждения email Supabase может не обновить user,
-    // пока мы не обновим сессию/токены
+    // ✅ FIX: refreshSession() только если реально есть session
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      console.warn('refreshUser getSession error', sessionError);
+      return null;
+    }
+
+    if (!session) {
+      // нет сессии — нечего рефрешить
+      setUser(null);
+      return null;
+    }
+
     try {
       await supabase.auth.refreshSession();
     } catch (e) {
-      // refreshSession может падать если нет активной сессии — это ок
+      // может ругаться в некоторых edge-case — не валим приложение
       console.warn('refreshSession warning', e);
     }
 
     const { data, error } = await supabase.auth.getUser();
     if (error) {
-      console.warn('refreshUser error', error);
-      throw error;
+      console.warn('refreshUser getUser error', error);
+      return null;
     }
 
     setUser(data.user ?? null);
@@ -136,7 +152,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         data: { full_name: fullName },
 
         // ✅ письмо после подтверждения редиректит на /confirmed
-        // Добавил source=email (не обязательно, но удобно для отладки/аналитики)
         emailRedirectTo: 'https://holdyou.app/confirmed?source=email',
       },
     });
@@ -152,8 +167,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    // ✅ Цепочка 2: письмо → Supabase verify → веб-страница → автоматический переход в приложение
-    // Веб-страница обрабатывает редирект и открывает приложение через deep link
+    // ✅ письмо → Supabase verify → веб-страница → deep link в приложение
     const redirectTo = 'https://holdyou.app/auth/reset-password';
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {

@@ -1,9 +1,8 @@
 // app/auth/reset-password.tsx
 import React, { useEffect, useRef } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Linking } from 'react-native';
 
 type Params = {
   code?: string;
@@ -13,10 +12,6 @@ type Params = {
 };
 
 function parseTokensFromUrl(url: string): Params {
-  // can be:
-  // holdyou:///auth/reset-password?access_token=...&refresh_token=...&type=recovery
-  // https://holdyou.app/auth/reset-password#access_token=...&refresh_token=...&type=recovery
-  // https://holdyou.app/auth/reset-password?code=...
   const out: Params = {};
 
   try {
@@ -64,10 +59,9 @@ export default function ResetPasswordProxyScreen() {
 
     redirectedRef.current = true;
 
-    // ВАЖНО: мы НЕ делаем setSession/updateUser здесь.
-    // Это только прокладка, которая переносит payload в “чистую” ветку /(reset).
+    // ✅ ВАЖНО: group "(reset)" НЕ часть URL. Путь должен быть "/reset-password"
     router.replace({
-      pathname: '/(reset)/reset-password',
+      pathname: '/reset-password',
       params: {
         code: payload.code,
         access_token: payload.access_token,
@@ -90,7 +84,7 @@ export default function ResetPasswordProxyScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params?.code, params?.access_token, params?.refresh_token, params?.type]);
 
-  // 2) Фоллбек: если payload прилетает как hash или через runtime event — парсим URL и редиректим
+  // 2) Фоллбек: если прилетает через runtime event — парсим URL и редиректим
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
       const payload = parseTokensFromUrl(url);
@@ -99,16 +93,10 @@ export default function ResetPasswordProxyScreen() {
 
     const sub = Linking.addEventListener('url', onUrl);
 
-    (async () => {
-      const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) onUrl({ url: initialUrl });
-    })();
-
     return () => sub.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Нейтральный экран “прокладки”
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
