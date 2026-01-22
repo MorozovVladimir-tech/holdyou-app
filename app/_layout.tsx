@@ -78,8 +78,11 @@ export default function RootLayout() {
                 <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
-                {/* ✅ ВАЖНО: отдельная ветка reset-цепочки (без влияния на confirm) */}
-                <Stack.Screen name="(reset)" options={{ headerShown: false }} />
+                {/* ✅ ВАЖНО: регистрируем РЕАЛЬНЫЙ экран reset-цепочки */}
+                <Stack.Screen
+                  name="(reset)/reset-password"
+                  options={{ headerShown: false }}
+                />
 
                 <Stack.Screen
                   name="modal"
