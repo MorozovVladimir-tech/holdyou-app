@@ -14,7 +14,7 @@ import {
   AppState,
   AppStateStatus,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 import Animated, {
   useSharedValue,
@@ -60,6 +60,15 @@ export default function Login() {
     isEmailConfirmed,
   } = useAuth();
 
+  const pathname = usePathname();
+
+  // ✅ ВАЖНО: когда мы в цепочке reset-password — НЕ делаем автоперекидывание в приложение.
+  // Иначе экран смены пароля может появляться и тут же исчезать.
+  const isInResetFlow = useMemo(() => {
+    const p = (pathname || '').toLowerCase();
+    return p.includes('reset-password') || p.includes('/(reset)');
+  }, [pathname]);
+
   const MIN_PASSWORD_LEN = 6;
 
   // live validation для register
@@ -77,11 +86,14 @@ export default function Login() {
     registerPassword === registerConfirm;
 
   // ✅ если есть сессия и email подтвержден — пускаем в приложение
+  // ❗️НО: НЕ делаем это во время reset-flow.
   useEffect(() => {
+    if (isInResetFlow) return;
+
     if (isAuthenticated && isEmailConfirmed) {
       router.replace('/(tabs)/talk');
     }
-  }, [isAuthenticated, isEmailConfirmed]);
+  }, [isAuthenticated, isEmailConfirmed, isInResetFlow]);
 
   // fade карточки
   const cardOpacity = useSharedValue(0);
@@ -196,7 +208,10 @@ export default function Login() {
       appStateRef.current = nextState;
 
       // только переход background/inactive -> active
-      if ((prev === 'background' || prev === 'inactive') && nextState === 'active') {
+      if (
+        (prev === 'background' || prev === 'inactive') &&
+        nextState === 'active'
+      ) {
         // Если пользователь в процессе подтверждения — авто-проверка
         if (modalType === 'confirm') {
           tryRefreshAndEnter('resume');
@@ -298,7 +313,9 @@ export default function Login() {
 
     // ✅ локальные проверки до запроса
     if (registerPassword.length < MIN_PASSWORD_LEN) {
-      setErrorMessage(`Password must be at least ${MIN_PASSWORD_LEN} characters`);
+      setErrorMessage(
+        `Password must be at least ${MIN_PASSWORD_LEN} characters`
+      );
       return;
     }
 
@@ -428,13 +445,19 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable onPress={() => setModalType('reset')} disabled={actionLoading}>
+          <Pressable
+            onPress={() => setModalType('reset')}
+            disabled={actionLoading}
+          >
             <Text style={[styles.modalLink, styles.modalLinkAccent]}>
               Forgot password?
             </Text>
           </Pressable>
 
-          <Pressable onPress={() => setModalType('register')} disabled={actionLoading}>
+          <Pressable
+            onPress={() => setModalType('register')}
+            disabled={actionLoading}
+          >
             <Text style={styles.modalLinkHighlight}>
               Don’t have an account? Register
             </Text>
@@ -477,7 +500,10 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+          <Pressable
+            onPress={() => setModalType('login')}
+            disabled={actionLoading}
+          >
             <Text style={styles.modalLinkHighlight}>
               Remembered your password? Log in
             </Text>
@@ -563,7 +589,10 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+          <Pressable
+            onPress={() => setModalType('login')}
+            disabled={actionLoading}
+          >
             <Text style={styles.modalLinkHighlight}>
               Already have an account? Log in
             </Text>
@@ -611,7 +640,10 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>I’ve confirmed</Text>
           </Pressable>
 
-          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+          <Pressable
+            onPress={() => setModalType('login')}
+            disabled={actionLoading}
+          >
             <Text style={[styles.modalLink, styles.modalLinkAccent]}>
               Back to login
             </Text>
@@ -683,7 +715,11 @@ export default function Login() {
                 ]}
               >
                 <View style={styles.iconWrapper}>
-                  <Image source={button.icon} style={styles.buttonIcon} resizeMode="contain" />
+                  <Image
+                    source={button.icon}
+                    style={styles.buttonIcon}
+                    resizeMode="contain"
+                  />
                 </View>
                 <Text style={styles.socialLabel}>{button.label}</Text>
               </Pressable>

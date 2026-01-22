@@ -1,20 +1,15 @@
 // app/onboarding/Welcome.tsx
-import React, { useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-} from 'react-native';
+import React, { useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withDelay,
   withTiming,
   Easing,
-  withRepeat,      // ← добавили
+  withRepeat,
 } from 'react-native-reanimated';
 import { Video, ResizeMode } from 'expo-av';
 import { useAuth } from '../context/AuthContext';
@@ -24,11 +19,18 @@ const orbVideo = require('../../assets/videos/orb_5.mp4');
 
 export default function WelcomeScreen() {
   const { user } = useAuth();
+  const pathname = usePathname();
+
+  // ✅ Reset-flow guard (только для цепочки смены пароля)
+  const isInResetFlow = useMemo(() => {
+    const p = (pathname || '').toLowerCase();
+    return p.includes('reset-password') || p.includes('/(reset)');
+  }, [pathname]);
 
   // ORB
   const orbOpacity = useSharedValue(0);
-  const introScale = useSharedValue(0.8);  // стартовый зум
-  const breathScale = useSharedValue(1);   // дыхание после появления
+  const introScale = useSharedValue(0.8); // стартовый зум
+  const breathScale = useSharedValue(1); // дыхание после появления
 
   // TEXTS
   const titleOpacity = useSharedValue(0);
@@ -57,8 +59,8 @@ export default function WelcomeScreen() {
           duration: 2600,
           easing: Easing.inOut(Easing.quad),
         }),
-        -1,      // бесконечно
-        true     // реверс (1 → 1.06 → 1)
+        -1, // бесконечно
+        true // реверс (1 → 1.06 → 1)
       )
     );
 
@@ -96,14 +98,24 @@ export default function WelcomeScreen() {
   }));
 
   const titleStyle = useAnimatedStyle(() => ({ opacity: titleOpacity.value }));
-  const subtitleStyle = useAnimatedStyle(() => ({ opacity: subtitleOpacity.value }));
-  const buttonsStyle = useAnimatedStyle(() => ({ opacity: buttonsOpacity.value }));
+  const subtitleStyle = useAnimatedStyle(() => ({
+    opacity: subtitleOpacity.value,
+  }));
+  const buttonsStyle = useAnimatedStyle(() => ({
+    opacity: buttonsOpacity.value,
+  }));
 
   const handleStartOnboarding = () => {
     router.push('/onboarding/Step1');
   };
 
   const handleGoToApp = () => {
+    // ✅ Если вдруг мы оказались в reset-флоу — не прыгаем внутрь приложения
+    if (isInResetFlow) {
+      router.replace('/(reset)/reset-password' as any);
+      return;
+    }
+
     if (user) {
       router.replace('/(tabs)/talk');
     } else {
@@ -142,10 +154,7 @@ export default function WelcomeScreen() {
       {/* Кнопки */}
       <Animated.View style={[styles.footer, buttonsStyle]}>
         <Pressable
-          style={({ pressed }) => [
-            styles.buttonBase,
-            pressed && styles.buttonPressed,
-          ]}
+          style={({ pressed }) => [styles.buttonBase, pressed && styles.buttonPressed]}
           onPress={handleStartOnboarding}
         >
           <Text style={styles.buttonText}>Get to know HoldYou</Text>

@@ -37,7 +37,7 @@ function DeepLinkGate() {
     const path = (parsed.path || '').replace(/^\/+/, '');
     const lowerPath = path.toLowerCase();
 
-    // confirmed оставляем (но только для runtime событий)
+    // ✅ confirmed оставляем как есть (только runtime события)
     if (lowerPath.startsWith('confirmed')) {
       try {
         await refreshUser();
@@ -47,13 +47,11 @@ function DeepLinkGate() {
       return;
     }
 
-    // reset-password здесь НЕ обрабатываем вообще
-    // и главное — НЕ трогаем initialURL в этом компоненте
+    // ❗️ reset-password тут НЕ обрабатываем
+    // ❗️ getInitialURL здесь НЕ трогаем (чтобы не съесть initialUrl у reset/confirmed)
   };
 
   useEffect(() => {
-    // ❗️ВАЖНО: НЕ вызываем Linking.getInitialURL() здесь,
-    // чтобы не "съесть" initialURL у экранов reset-password / confirmed.
     const sub = Linking.addEventListener('url', ({ url }) => {
       handleIncomingUrl(url);
     });
@@ -79,6 +77,10 @@ export default function RootLayout() {
               <Stack initialRouteName="onboarding">
                 <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+
+                {/* ✅ ВАЖНО: отдельная ветка reset-цепочки (без влияния на confirm) */}
+                <Stack.Screen name="(reset)" options={{ headerShown: false }} />
+
                 <Stack.Screen
                   name="modal"
                   options={{ presentation: 'modal', title: 'Modal' }}
