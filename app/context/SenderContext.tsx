@@ -17,7 +17,7 @@ type TimingMode = 'specific' | 'random';
 export interface SenderProfile {
   name: string;
   myName: string;
-  specialWords: string; // теперь НЕ обязателен для gating
+  specialWords: string; // НЕ обязателен
   status: string;
   personality: string;
   tone: Tone;
@@ -26,12 +26,8 @@ export interface SenderProfile {
   eveningTime?: string;
 }
 
-/**
- * ✅ ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ: "Sender заполнен?"
- * Минимальный флаг заполнения (ОБНОВЛЁННЫЙ):
- * name + status + myName + personality + tone
- * (specialWords НЕ обязателен)
- */
+const TONES: readonly Tone[] = ['love', 'support', 'calm', 'motivation'];
+
 export function isSenderProfileComplete(
   profile?: SenderProfile | null
 ): boolean {
@@ -58,7 +54,6 @@ interface SenderContextValue {
   updateSenderProfile: (patch: Partial<SenderProfile>) => void;
   resetSenderProfile: () => void;
   isLoaded: boolean;
-
   isSenderComplete: boolean;
 }
 
@@ -77,8 +72,6 @@ const DEFAULT_PROFILE: SenderProfile = {
 const STORAGE_KEY = 'holdyou_sender_profile_v1';
 
 const SenderContext = createContext<SenderContextValue | undefined>(undefined);
-
-const TONES: readonly Tone[] = ['love', 'support', 'calm', 'motivation'];
 
 // ---------- helpers: time mapping ----------
 
@@ -102,7 +95,7 @@ const fromSupabaseTime = (value?: string | null): string | undefined => {
   if (!value) return undefined;
 
   const [hourStr, minuteStr = '00'] = value.split(':');
-  let hours = parseInt(hourStr, 10);
+  const hours = parseInt(hourStr, 10);
   if (Number.isNaN(hours)) return undefined;
 
   const minutes = minuteStr.substring(0, 2);
@@ -122,8 +115,7 @@ const mapRowToProfile = (row: Record<string, any>): SenderProfile => ({
   status: row.status ?? '',
   personality: row.personality ?? '',
   tone: TONES.includes(row.tone) ? (row.tone as Tone) : DEFAULT_PROFILE.tone,
-  timingMode:
-    row.timing_mode === 'random' ? 'random' : DEFAULT_PROFILE.timingMode,
+  timingMode: row.timing_mode === 'random' ? 'random' : DEFAULT_PROFILE.timingMode,
   morningTime:
     fromSupabaseTime(row.message_time_morning) ?? DEFAULT_PROFILE.morningTime,
   eveningTime:
@@ -168,57 +160,6 @@ export function SenderProvider({ children }: SenderProviderProps) {
     }
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    if (!userId) {
-      (async () => {
-        const cached = (await loadFromCache()) ?? DEFAULT_PROFILE;
-        if (isMounted) {
-          setSenderProfile(cached);
-          setIsLoaded(true);
-        }
-      })();
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    (async () => {
-      let profile: SenderProfile | null = null;
-
-      try {
-        const { data, error } = await supabase
-          .from('sender_profiles')
-          .select('*')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        if (error) throw error;
-
-        if (data) {
-          profile = mapRowToProfile(data);
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
-        }
-      } catch (error) {
-        console.warn('Failed to fetch sender profile from Supabase', error);
-      }
-
-      if (!profile) {
-        profile = (await loadFromCache()) ?? DEFAULT_PROFILE;
-      }
-
-      if (isMounted) {
-        setSenderProfile(profile);
-        setIsLoaded(true);
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [loadFromCache, userId]);
-
   const syncProfile = useCallback(
     async (next: SenderProfile) => {
       try {
@@ -244,6 +185,49 @@ export function SenderProvider({ children }: SenderProviderProps) {
     },
     [userId]
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    (async () => {
+      let nextProfile: SenderProfile | null = null;
+
+      // 1) Supabase (если авторизован)
+      if (userId) {
+        try {
+          const { data, error } = await supabase
+            .from('sender_profiles')
+            .select('*')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (error) throw error;
+
+          if (data) {
+            nextProfile = mapRowToProfile(data);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextProfile));
+          }
+        } catch (error) {
+          console.warn('Failed to fetch sender profile from Supabase', error);
+        }
+      }
+
+      // 2) Cache fallback
+      if (!nextProfile) {
+        nextProfile = (await loadFromCache()) ?? DEFAULT_PROFILE;
+      }
+
+      // ✅ ВАЖНО: setSenderProfile получает только SenderProfile (не null)
+      if (isMounted) {
+        setSenderProfile(nextProfile);
+        setIsLoaded(true);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadFromCache, userId]);
 
   const updateSenderProfile = useCallback(
     (patch: Partial<SenderProfile>) => {

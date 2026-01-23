@@ -81,23 +81,22 @@ export default function TalkScreen() {
     }
 
     if (userName) {
-      toneParts.push(
-        `The user’s name is "${userName}". Use this name when you address them.`
-      );
+      toneParts.push(`The user’s name is "${userName}". Use this name when you address them.`);
     }
 
     const tone = toneParts.length ? toneParts.join(' — ') : undefined;
 
+    // specialWords не обязателен
     if (!name && !specialWords && !tone) return undefined;
 
     return {
       name: name || undefined,
-      specialWords: specialWords || undefined, // не обязателен, но если есть — полезно
+      specialWords: specialWords || undefined,
       tone,
     };
   }, [senderProfile]);
 
-  // индекс последнего сообщения HoldYou
+  // индекс последнего AI-сообщения
   const [lastAiIndex, setLastAiIndex] = useState<number | null>(null);
   const highlightAnim = useRef(new Animated.Value(0)).current;
 
@@ -135,7 +134,6 @@ export default function TalkScreen() {
         const parsed = JSON.parse(raw) as ChatMessage[];
         if (Array.isArray(parsed) && isMounted) {
           setMessages(parsed);
-          // после загрузки — прокрутить вниз один раз
           pendingAutoScrollRef.current = true;
         }
       } catch (e) {
@@ -248,11 +246,7 @@ export default function TalkScreen() {
         { role: 'user' as const, content: text },
       ];
 
-      const aiReplyText = await sendMessagesToAI(
-        userId,
-        payload,
-        aiSenderProfile
-      );
+      const aiReplyText = await sendMessagesToAI(userId, payload, aiSenderProfile);
 
       const aiMessage: ChatMessage = {
         id: `${Date.now()}-ai`,
@@ -303,10 +297,7 @@ export default function TalkScreen() {
 
   const getBubbleStyle = (message: ChatMessage, index: number) => {
     const isUser = message.role === 'user';
-    const base = [
-      styles.bubble,
-      isUser ? styles.bubbleUser : styles.bubbleHoldYou,
-    ];
+    const base = [styles.bubble, isUser ? styles.bubbleUser : styles.bubbleHoldYou];
 
     const isHighlighted = !isUser && lastAiIndex === index;
 
@@ -358,8 +349,8 @@ export default function TalkScreen() {
                   <Text style={styles.lockReqItem}>• Personality</Text>
                   <Text style={styles.lockReqItem}>• Tone of voice</Text>
 
-                  <Text style={styles.lockReqNote}>
-                    (Special words are optional)
+                  <Text style={[styles.lockReqItem, { marginTop: 6, opacity: 0.75 }]}>
+                    Optional: Special words
                   </Text>
                 </View>
 
@@ -368,18 +359,13 @@ export default function TalkScreen() {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     router.push('/(tabs)/sender');
                   }}
-                  style={({ pressed }) => [
-                    styles.lockBtn,
-                    pressed && { opacity: 0.75 },
-                  ]}
+                  style={({ pressed }) => [styles.lockBtn, pressed && { opacity: 0.75 }]}
                 >
                   <Text style={styles.lockBtnText}>Go to Sender</Text>
                   <Ionicons name="arrow-forward" size={18} color="#00B8D9" />
                 </Pressable>
 
-                <Text style={styles.lockHint}>
-                  After you save Sender, come back to Talk.
-                </Text>
+                <Text style={styles.lockHint}>After you save Sender, come back to Talk.</Text>
               </View>
             ) : (
               <>
@@ -411,9 +397,7 @@ export default function TalkScreen() {
                         <Text
                           style={[
                             styles.bubbleText,
-                            isUser
-                              ? styles.bubbleTextUser
-                              : styles.bubbleTextHoldYou,
+                            isUser ? styles.bubbleTextUser : styles.bubbleTextHoldYou,
                           ]}
                         >
                           {message.text}
@@ -424,10 +408,7 @@ export default function TalkScreen() {
                 </ScrollView>
 
                 {showScrollToBottom && (
-                  <Pressable
-                    style={styles.scrollToBottom}
-                    onPress={() => scrollToBottom(true)}
-                  >
+                  <Pressable style={styles.scrollToBottom} onPress={() => scrollToBottom(true)}>
                     <Ionicons name="arrow-down" size={18} color="#00B8D9" />
                   </Pressable>
                 )}
@@ -449,10 +430,7 @@ export default function TalkScreen() {
                   />
                   <Pressable
                     onPress={handleSend}
-                    style={({ pressed }) => [
-                      styles.sendButton,
-                      pressed && { opacity: 0.7 },
-                    ]}
+                    style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
                   >
                     <Ionicons name="paper-plane" size={20} color="#00B8D9" />
                   </Pressable>
@@ -652,12 +630,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 18,
-  },
-  lockReqNote: {
-    marginTop: 8,
-    fontSize: 11,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.55)',
   },
   lockBtn: {
     flexDirection: 'row',
