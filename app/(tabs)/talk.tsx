@@ -1,3 +1,4 @@
+// app/(tabs)/talk.tsx
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
@@ -16,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import { router } from 'expo-router';
 
 import {
   sendMessagesToAI,
@@ -43,34 +45,33 @@ export default function TalkScreen() {
   const { user } = useAuth();
   const userId = user?.id ?? 'dev-user';
 
-  const { senderProfile } = useSender();
+  const { senderProfile, isSenderComplete } = useSender();
+
+  // Talk locked if Sender not complete
+  const isTalkLocked = !isSenderComplete;
 
   // Ключ для сохранения истории чата (привязан к пользователю)
-  const storageKey = useMemo(
-    () => `holdyou_talk_messages_${userId}`,
-    [userId]
-  );
+  const storageKey = useMemo(() => `holdyou_talk_messages_${userId}`, [userId]);
 
   // превращаем SenderContext-профиль в "паспорт" для ИИ
   const aiSenderProfile: AiSenderProfile | undefined = useMemo(() => {
     if (!senderProfile) return undefined;
 
-    const name = senderProfile.name?.trim();
-    const specialWords = senderProfile.specialWords?.trim();
-    const userName = senderProfile.myName?.trim();
+    const name = (senderProfile as any).name?.trim?.() ?? '';
+    const specialWords = (senderProfile as any).specialWords?.trim?.() ?? '';
+    const userName = (senderProfile as any).myName?.trim?.() ?? '';
 
-    // статус — берём мягко через any
     const status = (senderProfile as any).status
       ? String((senderProfile as any).status).trim()
       : '';
 
     const toneParts: string[] = [];
 
-    if (senderProfile.tone) {
-      toneParts.push(senderProfile.tone);
+    if ((senderProfile as any).tone) {
+      toneParts.push((senderProfile as any).tone);
     }
-    if (senderProfile.personality) {
-      toneParts.push(senderProfile.personality);
+    if ((senderProfile as any).personality) {
+      toneParts.push((senderProfile as any).personality);
     }
 
     if (status) {
@@ -91,7 +92,7 @@ export default function TalkScreen() {
 
     return {
       name: name || undefined,
-      specialWords: specialWords || undefined,
+      specialWords: specialWords || undefined, // не обязателен, но если есть — полезно
       tone,
     };
   }, [senderProfile]);
@@ -100,9 +101,32 @@ export default function TalkScreen() {
   const [lastAiIndex, setLastAiIndex] = useState<number | null>(null);
   const highlightAnim = useRef(new Animated.Value(0)).current;
 
-  // Загружаем историю чата из AsyncStorage при изменении userId
+  // ---- автоскролл: умный (не рвём скролл, если юзер ушёл вверх) ----
+  const isAtBottomRef = useRef(true);
+  const pendingAutoScrollRef = useRef(false);
+
+  const scrollToBottom = (animated = true) => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollToEnd({ animated });
+  };
+
+  // Если Talk залочен — не показываем историю/не оставляем ввод
+  useEffect(() => {
+    if (isTalkLocked) {
+      setDraft('');
+      setIsLoading(false);
+      setMessages([]);
+      setShowScrollToBottom(false);
+      isAtBottomRef.current = true;
+      pendingAutoScrollRef.current = false;
+    }
+  }, [isTalkLocked]);
+
+  // Загружаем историю чата (только если Talk доступен)
   useEffect(() => {
     let isMounted = true;
+
+    if (isTalkLocked) return () => { isMounted = false; };
 
     (async () => {
       try {
@@ -111,6 +135,8 @@ export default function TalkScreen() {
         const parsed = JSON.parse(raw) as ChatMessage[];
         if (Array.isArray(parsed) && isMounted) {
           setMessages(parsed);
+          // после загрузки — прокрутить вниз один раз
+          pendingAutoScrollRef.current = true;
         }
       } catch (e) {
         console.warn('Failed to load talk history', e);
@@ -120,10 +146,12 @@ export default function TalkScreen() {
     return () => {
       isMounted = false;
     };
-  }, [storageKey]);
+  }, [storageKey, isTalkLocked]);
 
-  // Сохраняем историю чата при каждом изменении messages
+  // Сохраняем историю чата (только если Talk доступен)
   useEffect(() => {
+    if (isTalkLocked) return;
+
     (async () => {
       try {
         await AsyncStorage.setItem(storageKey, JSON.stringify(messages));
@@ -131,14 +159,10 @@ export default function TalkScreen() {
         console.warn('Failed to save talk history', e);
       }
     })();
-  }, [messages, storageKey]);
+  }, [messages, storageKey, isTalkLocked]);
 
-  // автоскролл + подсветка последнего AI-сообщения
+  // Подсветка последнего AI-сообщения
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollToEnd({ animated: true });
-    }
-
     if (!messages.length) return;
 
     let idx: number | null = null;
@@ -152,24 +176,38 @@ export default function TalkScreen() {
 
     setLastAiIndex(idx);
 
+    highlightAnim.stopAnimation();
     highlightAnim.setValue(1);
     Animated.timing(highlightAnim, {
       toValue: 0,
       duration: 800,
       useNativeDriver: false,
     }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length]);
 
-  // автоскролл, когда появляется клавиатура
+  // Автоскролл: только если мы у низа ИЛИ это "запланированный" скролл
+  useEffect(() => {
+    if (!messages.length) return;
+
+    if (isAtBottomRef.current || pendingAutoScrollRef.current) {
+      setTimeout(() => {
+        scrollToBottom(true);
+        pendingAutoScrollRef.current = false;
+      }, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
+  // автоскролл, когда появляется клавиатура (но тоже умный)
   useEffect(() => {
     const showSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
       () => {
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollToEnd({ animated: true });
-          }
-        }, 50);
+        if (isAtBottomRef.current) {
+          pendingAutoScrollRef.current = true;
+          setTimeout(() => scrollToBottom(true), 50);
+        }
       }
     );
 
@@ -179,6 +217,11 @@ export default function TalkScreen() {
   }, []);
 
   const handleSend = async () => {
+    if (isTalkLocked) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
     const text = draft.trim();
     if (!text || isLoading) return;
 
@@ -191,11 +234,12 @@ export default function TalkScreen() {
     };
 
     setDraft('');
+    pendingAutoScrollRef.current = true;
+
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      // История диалога для ИИ — ТОЛЬКО user/assistant, без system
       const payload = [
         ...messages.map(m => ({
           role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
@@ -216,15 +260,16 @@ export default function TalkScreen() {
         text: aiReplyText,
       };
 
+      pendingAutoScrollRef.current = true;
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
       console.warn('Failed to send message', error);
       const fallback: ChatMessage = {
         id: `${Date.now()}-fallback`,
         role: 'assistant',
-        text:
-          "I'm having trouble answering right now, but I'm still here with you.",
+        text: "I'm having trouble answering right now, but I'm still here with you.",
       };
+      pendingAutoScrollRef.current = true;
       setMessages(prev => [...prev, fallback]);
     } finally {
       setIsLoading(false);
@@ -232,8 +277,9 @@ export default function TalkScreen() {
   };
 
   const handleInputFocus = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollToEnd({ animated: true });
+    if (isAtBottomRef.current) {
+      pendingAutoScrollRef.current = true;
+      scrollToBottom(true);
     }
   };
 
@@ -242,12 +288,16 @@ export default function TalkScreen() {
     const distanceFromBottom =
       contentSize.height - (contentOffset.y + layoutMeasurement.height);
 
-    setShowScrollToBottom(distanceFromBottom > 80);
+    const atBottom = distanceFromBottom <= 80;
+    isAtBottomRef.current = atBottom;
+
+    setShowScrollToBottom(!atBottom);
   };
 
-  const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollToEnd({ animated: true });
+  const onContentSizeChange = () => {
+    if (pendingAutoScrollRef.current) {
+      scrollToBottom(true);
+      pendingAutoScrollRef.current = false;
     }
   };
 
@@ -267,7 +317,7 @@ export default function TalkScreen() {
           backgroundColor: highlightAnim.interpolate({
             inputRange: [0, 1],
             outputRange: ['#085B6A', '#0BA6C0'],
-          }),
+          }) as any,
         },
       ];
     }
@@ -280,9 +330,7 @@ export default function TalkScreen() {
       {/* HEADER */}
       <View style={styles.header}>
         <Text style={styles.title}>Talk</Text>
-        <Text style={styles.subtitle}>
-          Talk with the one you wish could be here
-        </Text>
+        <Text style={styles.subtitle}>Talk with the one you wish could be here</Text>
       </View>
 
       {/* Градиентная рамка чата */}
@@ -294,80 +342,123 @@ export default function TalkScreen() {
           style={styles.chatGradient}
         >
           <View style={styles.chatContainer}>
-            <ScrollView
-              ref={scrollRef}
-              style={styles.chatScroll}
-              contentContainerStyle={styles.chatContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              onScroll={handleScroll}
-              scrollEventThrottle={16}
-            >
-              {isLoading && messages.length === 0 && (
-                <Text style={styles.chatHint}>Loading your messages…</Text>
-              )}
-
-              {!isLoading && messages.length === 0 && (
-                <Text style={styles.chatHint}>
-                  Start by saying something to the one you wish could be here.
+            {isTalkLocked ? (
+              <View style={styles.lockWrap}>
+                <Text style={styles.lockTitle}>Create your Sender first</Text>
+                <Text style={styles.lockText}>
+                  Talk is locked until you fill the required Sender details and save.
                 </Text>
-              )}
 
-              {messages.map((message, index) => {
-                const isUser = message.role === 'user';
-                const bubbleStyle = getBubbleStyle(message, index);
-                return (
-                  <Animated.View key={message.id} style={bubbleStyle}>
-                    <Text
-                      style={[
-                        styles.bubbleText,
-                        isUser
-                          ? styles.bubbleTextUser
-                          : styles.bubbleTextHoldYou,
-                      ]}
-                    >
-                      {message.text}
+                <View style={styles.lockReqBox}>
+                  <Text style={styles.lockReqTitle}>Required fields:</Text>
+
+                  <Text style={styles.lockReqItem}>• Name</Text>
+                  <Text style={styles.lockReqItem}>• Status (ex / partner / mom / friend)</Text>
+                  <Text style={styles.lockReqItem}>• Your name</Text>
+                  <Text style={styles.lockReqItem}>• Personality</Text>
+                  <Text style={styles.lockReqItem}>• Tone of voice</Text>
+
+                  <Text style={styles.lockReqNote}>
+                    (Special words are optional)
+                  </Text>
+                </View>
+
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push('/(tabs)/sender');
+                  }}
+                  style={({ pressed }) => [
+                    styles.lockBtn,
+                    pressed && { opacity: 0.75 },
+                  ]}
+                >
+                  <Text style={styles.lockBtnText}>Go to Sender</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#00B8D9" />
+                </Pressable>
+
+                <Text style={styles.lockHint}>
+                  After you save Sender, come back to Talk.
+                </Text>
+              </View>
+            ) : (
+              <>
+                <ScrollView
+                  ref={scrollRef}
+                  style={styles.chatScroll}
+                  contentContainerStyle={styles.chatContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  onScroll={handleScroll}
+                  scrollEventThrottle={16}
+                  onContentSizeChange={onContentSizeChange}
+                >
+                  {isLoading && messages.length === 0 && (
+                    <Text style={styles.chatHint}>Loading your messages…</Text>
+                  )}
+
+                  {!isLoading && messages.length === 0 && (
+                    <Text style={styles.chatHint}>
+                      Start by saying something to the one you wish could be here.
                     </Text>
-                  </Animated.View>
-                );
-              })}
-            </ScrollView>
+                  )}
 
-            {/* Кнопка "↓" */}
-            {showScrollToBottom && (
-              <Pressable
-                style={styles.scrollToBottom}
-                onPress={scrollToBottom}
-              >
-                <Ionicons name="arrow-down" size={18} color="#00B8D9" />
-              </Pressable>
+                  {messages.map((message, index) => {
+                    const isUser = message.role === 'user';
+                    const bubbleStyle = getBubbleStyle(message, index);
+                    return (
+                      <Animated.View key={message.id} style={bubbleStyle}>
+                        <Text
+                          style={[
+                            styles.bubbleText,
+                            isUser
+                              ? styles.bubbleTextUser
+                              : styles.bubbleTextHoldYou,
+                          ]}
+                        >
+                          {message.text}
+                        </Text>
+                      </Animated.View>
+                    );
+                  })}
+                </ScrollView>
+
+                {showScrollToBottom && (
+                  <Pressable
+                    style={styles.scrollToBottom}
+                    onPress={() => scrollToBottom(true)}
+                  >
+                    <Ionicons name="arrow-down" size={18} color="#00B8D9" />
+                  </Pressable>
+                )}
+
+                {/* INPUT ROW */}
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={draft}
+                    onChangeText={setDraft}
+                    placeholder="Type what you want to say…"
+                    placeholderTextColor="rgba(255,255,255,0.4)"
+                    multiline
+                    scrollEnabled
+                    returnKeyType="send"
+                    onSubmitEditing={handleSend}
+                    onFocus={handleInputFocus}
+                    textAlignVertical="top"
+                  />
+                  <Pressable
+                    onPress={handleSend}
+                    style={({ pressed }) => [
+                      styles.sendButton,
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <Ionicons name="paper-plane" size={20} color="#00B8D9" />
+                  </Pressable>
+                </View>
+              </>
             )}
-
-            {/* INPUT ROW */}
-            <View style={styles.inputRow}>
-              <TextInput
-                style={styles.chatInput}
-                value={draft}
-                onChangeText={setDraft}
-                placeholder="Type what you want to say…"
-                placeholderTextColor="rgba(255,255,255,0.4)"
-                multiline
-                scrollEnabled
-                returnKeyType="send"
-                onSubmitEditing={handleSend}
-                onFocus={handleInputFocus}
-                textAlignVertical="top"
-              />
-              <Pressable
-                onPress={handleSend}
-                style={({ pressed }) => [
-                  styles.sendButton,
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <Ionicons name="paper-plane" size={20} color="#00B8D9" />
-              </Pressable>
-            </View>
           </View>
         </LinearGradient>
       </View>
@@ -380,14 +471,13 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     paddingHorizontal: 12,
-    paddingTop: 0, // подняли весь экран выше (чтобы ближе к орбу)
+    paddingTop: 0,
     backgroundColor: '#000000',
   },
 
-  // HEADER
   header: {
     alignItems: 'center',
-    marginBottom: 8, // одинаково с Sender / Profile
+    marginBottom: 8,
     shadowColor: '#00B8D9',
     shadowOpacity: 0.2,
     shadowOffset: { width: 0, height: 6 },
@@ -414,7 +504,6 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
   },
 
-  // Градиентная рамка
   chatGradientWrapper: {
     flex: 1,
     width: '100%',
@@ -425,7 +514,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 0.9,
   },
-
   chatContainer: {
     flex: 1,
     borderRadius: 10,
@@ -435,9 +523,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
 
-  chatScroll: {
-    flex: 1,
-  },
+  chatScroll: { flex: 1 },
   chatContent: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -472,12 +558,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: 'rgba(255,255,255,0.95)',
   },
-  bubbleTextUser: {
-    textAlign: 'left',
-  },
-  bubbleTextHoldYou: {
-    textAlign: 'left',
-  },
+  bubbleTextUser: { textAlign: 'left' },
+  bubbleTextHoldYou: { textAlign: 'left' },
 
   scrollToBottom: {
     position: 'absolute',
@@ -525,5 +607,78 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // LOCK UI
+  lockWrap: {
+    flex: 1,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#00B8D9',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  lockText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.85)',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  lockReqBox: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 0.6,
+    borderColor: 'rgba(0,184,217,0.65)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  lockReqTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+    marginBottom: 6,
+  },
+  lockReqItem: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.78)',
+    lineHeight: 18,
+  },
+  lockReqNote: {
+    marginTop: 8,
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.55)',
+  },
+  lockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8 as any,
+    borderWidth: 0.5,
+    borderColor: '#00B8D9',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  lockBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  lockHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.6)',
+    textAlign: 'center',
   },
 });

@@ -1,3 +1,4 @@
+// app/context/SenderContext.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
   createContext,
@@ -14,15 +15,10 @@ type Tone = 'love' | 'support' | 'calm' | 'motivation';
 type TimingMode = 'specific' | 'random';
 
 export interface SenderProfile {
-  // Имя отправителя (того, кого «оживляем»)
   name: string;
-  // «Твоё имя» — как он/она обращается к пользователю
   myName: string;
-  // Никнеймы/ласковые обращения к пользователю
-  specialWords: string;
-  // Статус/роль отправителя: мама, бывшая, партнёр, друг и т.п.
+  specialWords: string; // теперь НЕ обязателен для gating
   status: string;
-  // Описание манеры общения, характера, деталей
   personality: string;
   tone: Tone;
   timingMode: TimingMode;
@@ -30,11 +26,40 @@ export interface SenderProfile {
   eveningTime?: string;
 }
 
+/**
+ * ✅ ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ: "Sender заполнен?"
+ * Минимальный флаг заполнения (ОБНОВЛЁННЫЙ):
+ * name + status + myName + personality + tone
+ * (specialWords НЕ обязателен)
+ */
+export function isSenderProfileComplete(
+  profile?: SenderProfile | null
+): boolean {
+  if (!profile) return false;
+
+  const name = (profile.name ?? '').toString().trim();
+  const status = (profile.status ?? '').toString().trim();
+  const myName = (profile.myName ?? '').toString().trim();
+  const personality = (profile.personality ?? '').toString().trim();
+
+  const hasValidTone = TONES.includes(profile.tone);
+
+  return (
+    name.length > 0 &&
+    status.length > 0 &&
+    myName.length > 0 &&
+    personality.length > 0 &&
+    hasValidTone
+  );
+}
+
 interface SenderContextValue {
   senderProfile: SenderProfile;
   updateSenderProfile: (patch: Partial<SenderProfile>) => void;
   resetSenderProfile: () => void;
   isLoaded: boolean;
+
+  isSenderComplete: boolean;
 }
 
 const DEFAULT_PROFILE: SenderProfile = {
@@ -92,7 +117,6 @@ const fromSupabaseTime = (value?: string | null): string | undefined => {
 
 const mapRowToProfile = (row: Record<string, any>): SenderProfile => ({
   name: row.name ?? '',
-  // 🔥 Читаем из user_name (в БД), а не my_name
   myName: row.user_name ?? '',
   specialWords: row.special_words ?? '',
   status: row.status ?? '',
@@ -106,11 +130,9 @@ const mapRowToProfile = (row: Record<string, any>): SenderProfile => ({
     fromSupabaseTime(row.message_time_evening) ?? DEFAULT_PROFILE.eveningTime,
 });
 
-// payload для upsert в sender_profiles
 const buildSupabasePayload = (profile: SenderProfile, userId: string) => ({
   user_id: userId,
   name: profile.name,
-  // 🔥 Пишем в user_name (в БД), оставляя myName в TS-модели
   user_name: profile.myName,
   special_words: profile.specialWords,
   status: profile.status,
@@ -199,14 +221,12 @@ export function SenderProvider({ children }: SenderProviderProps) {
 
   const syncProfile = useCallback(
     async (next: SenderProfile) => {
-      // локальный кеш
       try {
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       } catch (error) {
         console.warn('Failed to save sender profile locally', error);
       }
 
-      // если нет userId — не трогаем Supabase
       if (!userId) return;
 
       try {
@@ -225,24 +245,25 @@ export function SenderProvider({ children }: SenderProviderProps) {
     [userId]
   );
 
-  const persistProfile = useCallback(
-    (next: SenderProfile) => {
-      setSenderProfile(next);
-      syncProfile(next);
+  const updateSenderProfile = useCallback(
+    (patch: Partial<SenderProfile>) => {
+      setSenderProfile((prev) => {
+        const next = { ...prev, ...patch };
+        syncProfile(next);
+        return next;
+      });
     },
     [syncProfile]
   );
 
-  const updateSenderProfile = useCallback(
-    (patch: Partial<SenderProfile>) => {
-      persistProfile({ ...senderProfile, ...patch });
-    },
-    [persistProfile, senderProfile]
-  );
-
   const resetSenderProfile = useCallback(() => {
-    persistProfile(DEFAULT_PROFILE);
-  }, [persistProfile]);
+    setSenderProfile(DEFAULT_PROFILE);
+    syncProfile(DEFAULT_PROFILE);
+  }, [syncProfile]);
+
+  const isSenderComplete = useMemo(() => {
+    return isSenderProfileComplete(senderProfile);
+  }, [senderProfile]);
 
   const value = useMemo(
     () => ({
@@ -250,8 +271,9 @@ export function SenderProvider({ children }: SenderProviderProps) {
       updateSenderProfile,
       resetSenderProfile,
       isLoaded,
+      isSenderComplete,
     }),
-    [senderProfile, updateSenderProfile, resetSenderProfile, isLoaded]
+    [senderProfile, updateSenderProfile, resetSenderProfile, isLoaded, isSenderComplete]
   );
 
   return (

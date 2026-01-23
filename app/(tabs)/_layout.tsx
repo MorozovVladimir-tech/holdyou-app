@@ -24,6 +24,7 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 
 import { useTalk } from '../context/TalkContext';
+import { useSender } from '../context/SenderContext';
 
 // ВИДЕО-ОРБ (orb_5)
 const orbVideo = require('../../assets/videos/orb_5.mp4');
@@ -32,6 +33,9 @@ export default function TabsLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const { isLoading } = useTalk(); // AI отвечает
+
+  // ✅ Sender gating
+  const { isSenderComplete } = useSender();
 
   // Базовое дыхание орба
   const scale = useSharedValue(0.9);
@@ -93,6 +97,14 @@ export default function TabsLayout() {
     });
   }, [typingGlow, isLoading]);
 
+  // ✅ Авто-редирект: если Sender не заполнен, Talk не должен открываться вообще
+  useEffect(() => {
+    if (!pathname) return;
+    if (!isSenderComplete && pathname.includes('/talk')) {
+      router.replace('/(tabs)/sender' as never);
+    }
+  }, [pathname, isSenderComplete, router]);
+
   // Итоговая анимация орба (масштаб + внешний glow)
   const orbAnimatedStyle = useAnimatedStyle(() => {
     const totalGlow = tapGlow.value + typingGlow.value;
@@ -141,6 +153,28 @@ export default function TabsLayout() {
       withTiming(0.55, { duration: 160 }),
       withTiming(0, { duration: 250 })
     );
+  };
+
+  const handleTabPress = async (tabId: string) => {
+    if (tabId === 'talk') {
+      if (!isSenderComplete) {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        router.push('/(tabs)/sender' as never);
+        return;
+      }
+      router.push('/(tabs)/talk' as never);
+      return;
+    }
+
+    if (tabId === 'sender') {
+      router.push('/(tabs)/sender' as never);
+      return;
+    }
+
+    if (tabId === 'about') {
+      router.push('/(tabs)/about' as never);
+      return;
+    }
   };
 
   return (
@@ -197,13 +231,7 @@ export default function TabsLayout() {
             return (
               <Pressable
                 key={tab.id}
-                onPress={() => {
-                  if (tab.id === 'talk') router.push('/(tabs)/talk' as never);
-                  else if (tab.id === 'sender')
-                    router.push('/(tabs)/sender' as never);
-                  else if (tab.id === 'about')
-                    router.push('/(tabs)/about' as never);
-                }}
+                onPress={() => handleTabPress(tab.id)}
                 style={[styles.tabButton, isActive && styles.tabButtonActive]}
               >
                 <Ionicons

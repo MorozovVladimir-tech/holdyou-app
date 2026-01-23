@@ -5,6 +5,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { supabase } from '../lib/supabaseClient';
@@ -51,7 +52,7 @@ type TalkProviderProps = {
 
 export function TalkProvider({ children }: TalkProviderProps) {
   const { user } = useAuth();
-  const { senderProfile } = useSender();
+  const { senderProfile, isSenderComplete } = useSender();
 
   const [messages, setMessages] = useState<TalkMessage[]>([]);
 
@@ -61,8 +62,22 @@ export function TalkProvider({ children }: TalkProviderProps) {
 
   const userId = user?.id ?? null;
 
+  // ✅ фикс "устаревшей истории" — всегда держим актуальный messages в ref
+  const messagesRef = useRef<TalkMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   // ========= Загрузка истории из Supabase =========
   useEffect(() => {
+    // ✅ если Sender не заполнен — Talk вообще не должен грузиться
+    if (!isSenderComplete) {
+      setMessages([]);
+      setIsAIReplying(false);
+      setIsHistoryLoading(false);
+      return;
+    }
+
     if (!userId) {
       setMessages([]);
       setIsHistoryLoading(false);
@@ -72,6 +87,7 @@ export function TalkProvider({ children }: TalkProviderProps) {
     let isMounted = true;
 
     (async () => {
+      setIsHistoryLoading(true);
       try {
         const { data, error } = await supabase
           .from('chat_messages')
@@ -96,7 +112,7 @@ export function TalkProvider({ children }: TalkProviderProps) {
     return () => {
       isMounted = false;
     };
-  }, [userId]);
+  }, [userId, isSenderComplete]);
 
   const appendMessage = useCallback((message: TalkMessage) => {
     setMessages((prev) => [...prev, message]);
@@ -105,6 +121,9 @@ export function TalkProvider({ children }: TalkProviderProps) {
   // ========= Отправка сообщения пользователя =========
   const sendUserMessage = useCallback(
     async (rawText: string) => {
+      // ✅ страховка: без Sender — не отправляем вообще
+      if (!isSenderComplete) return;
+
       const text = rawText.trim();
       if (!text) return;
 
@@ -152,21 +171,19 @@ export function TalkProvider({ children }: TalkProviderProps) {
       setIsAIReplying(true);
 
       try {
-        // История до текущего сообщения
-        const history: TalkHistoryItem[] = messages.map((m) => ({
+        // ✅ История до текущего сообщения — берём из ref (всегда актуально)
+        const history: TalkHistoryItem[] = messagesRef.current.map((m) => ({
           role: m.role,
           text: m.text,
         }));
 
-        // Вызов сервиса (внутри он пойдёт на supabase Edge Function /talk-ai)
         const replyText = await getHoldYouReply({
           userId,
-          senderProfile, // здесь уже есть name, specialWords, personality, tone
+          senderProfile,
           history,
           newUserMessage: text,
         });
 
-        // Лёгкая задержка, чтобы ответ не прилетал «роботом мгновенно»
         await new Promise((resolve) =>
           setTimeout(resolve, 500 + Math.floor(Math.random() * 400))
         );
@@ -200,7 +217,7 @@ export function TalkProvider({ children }: TalkProviderProps) {
         setIsAIReplying(false);
       }
     },
-    [appendMessage, userId, senderProfile, messages]
+    [appendMessage, userId, senderProfile, isSenderComplete]
   );
 
   const clearMessages = useCallback(async () => {

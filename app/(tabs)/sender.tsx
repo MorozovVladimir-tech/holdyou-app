@@ -1,5 +1,5 @@
 // app/(tabs)/sender.tsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -100,13 +100,35 @@ export default function SenderScreen() {
     }).start();
   };
 
+  // ✅ Новый минимальный флаг заполнения (как ты выбрал):
+  // name + status + myName + specialWords(>=1) + personality + tone
+  const isComplete = useMemo(() => {
+    const n = name.trim();
+    const st = status.trim();
+    const mn = myName.trim();
+    const p = personality.trim();
+    const t = (tone ?? '').trim();
+
+    const hasSpecialWords = Array.isArray(specialWordsList)
+      && specialWordsList.map(w => w.trim()).filter(Boolean).length > 0;
+
+    return (
+      n.length > 0 &&
+      st.length > 0 &&
+      mn.length > 0 &&
+      hasSpecialWords &&
+      p.length > 0 &&
+      t.length > 0
+    );
+  }, [name, status, myName, specialWordsList, personality, tone]);
+
   // Подтягиваем профиль
   useEffect(() => {
     if (!isLoaded) return;
 
     setName(senderProfile.name ?? '');
     setMyName(senderProfile.myName ?? '');
-    setStatus(senderProfile.status ?? '');
+    setStatus((senderProfile as any).status ?? '');
 
     if (senderProfile.specialWords) {
       const parsed = senderProfile.specialWords
@@ -122,16 +144,34 @@ export default function SenderScreen() {
     setPersonality(senderProfile.personality ?? '');
     setMorningTime(senderProfile.morningTime ?? '08:00 AM');
     setEveningTime(senderProfile.eveningTime ?? '07:00 PM');
-    setTone(senderProfile.tone ?? 'support');
+    setTone((senderProfile.tone ?? 'support') as any);
     setTimingMode(senderProfile.timingMode ?? 'specific');
 
-    // если профиль уже заполнен, считаем его "замороженным"
+    // ✅ "замороженным" считаем ТОЛЬКО если профиль реально complete
+    const profAny = senderProfile as any;
+    const profName = (profAny.name ?? '').toString().trim();
+    const profStatus = (profAny.status ?? '').toString().trim();
+    const profMyName = (profAny.myName ?? '').toString().trim();
+    const profPersonality = (profAny.personality ?? '').toString().trim();
+    const profTone = (profAny.tone ?? '').toString().trim();
+
+    const profSpecialWords =
+      typeof profAny.specialWords === 'string'
+        ? profAny.specialWords
+            .split(',')
+            .map((w: string) => w.trim())
+            .filter(Boolean)
+        : [];
+
+    const profHasSpecial = profSpecialWords.length > 0;
+
     const hasData =
-      !!senderProfile.name ||
-      !!senderProfile.myName ||
-      !!senderProfile.status ||
-      !!senderProfile.specialWords ||
-      !!senderProfile.personality;
+      profName.length > 0 &&
+      profStatus.length > 0 &&
+      profMyName.length > 0 &&
+      profHasSpecial &&
+      profPersonality.length > 0 &&
+      profTone.length > 0;
 
     setIsLocked(hasData);
   }, [isLoaded, senderProfile]);
@@ -156,23 +196,37 @@ export default function SenderScreen() {
 
   const handleSave = async () => {
     if (!isLoaded || isLocked) return;
+
+    // ✅ Валидация по минимальному флагу
+    if (!isComplete) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
     setSaving(true);
 
-    const specialWords = specialWordsList.join(', ');
+    const specialWords = specialWordsList
+      .map(w => w.trim())
+      .filter(Boolean)
+      .join(', ');
 
     const next = {
-      name,
-      myName,
-      status,
+      name: name.trim(),
+      myName: myName.trim(),
+      status: status.trim(),
       specialWords,
-      personality,
+      personality: personality.trim(),
       morningTime,
       eveningTime,
       tone,
       timingMode,
+
+      // удобный флаг для контекста (если SenderContext сохраняет — супер)
+      // если нет — не ломает, просто будет проигнорирован
+      isComplete: true,
     } as const;
 
-    updateSenderProfile(next);
+    updateSenderProfile(next as any);
 
     try {
       await rescheduleSenderNotifications({
@@ -240,10 +294,15 @@ export default function SenderScreen() {
     if (isLocked) return;
     const word = specialWordsInput.trim();
     if (!word) return;
-    if (specialWordsList.includes(word)) {
+
+    // нормализуем: не даём дублей по lower-case
+    const normalized = word.toLowerCase();
+    const exists = specialWordsList.some(w => w.toLowerCase() === normalized);
+    if (exists) {
       setSpecialWordsInput('');
       return;
     }
+
     setSpecialWordsList(prev => [...prev, word]);
     setSpecialWordsInput('');
     setActiveSection('identity');
@@ -324,7 +383,7 @@ export default function SenderScreen() {
             />
           </FieldBlock>
 
-          {/* NEW: STATUS */}
+          {/* STATUS */}
           <FieldBlock
             label="Status"
             helper="Who are they for you? (ex, partner, mom, friend, etc.)"
@@ -450,9 +509,7 @@ export default function SenderScreen() {
                     ]}
                   >
                     <Text style={styles.toneCardTitle}>{option.title}</Text>
-                    <Text style={styles.toneCardBody}>
-                      {option.subtitle}
-                    </Text>
+                    <Text style={styles.toneCardBody}>{option.subtitle}</Text>
                   </Pressable>
                 </Animated.View>
               );
@@ -712,15 +769,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     width: '100%',
     paddingHorizontal: 24,
-    paddingTop: 0,          // было 8 — подняли ближе к орбу
+    paddingTop: 0,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 8,        // было 10 — выровняли с Talk/Profile
+    marginBottom: 8,
   },
-  content: {
-    flex: 1,
-  },
+  content: { flex: 1 },
   scrollContent: {
     paddingBottom: 40,
     gap: 28,
@@ -731,9 +786,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingText: {
-    color: '#FFFFFF',
-  },
+  loadingText: { color: '#FFFFFF' },
   title: {
     fontSize: 22,
     fontWeight: '700',
@@ -748,9 +801,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  section: {
-    gap: 14,
-  },
+  section: { gap: 14 },
   sectionHeader: {
     alignItems: 'center',
     marginBottom: 6,
@@ -768,9 +819,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  fieldBlock: {
-    gap: 8,
-  },
+  fieldBlock: { gap: 8 },
   label: {
     fontSize: 14,
     fontWeight: '600',
@@ -781,9 +830,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: 'rgba(255,255,255,0.7)',
   },
-  fieldContent: {
-    marginTop: 4,
-  },
+  fieldContent: { marginTop: 4 },
   input: {
     borderRadius: 10,
     borderWidth: 0.8,
@@ -796,10 +843,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // SPECIAL WORDS
-  specialWordsBlock: {
-    gap: 8,
-  },
+  specialWordsBlock: { gap: 8 },
   chipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -860,7 +904,6 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
 
-  // PERSONALITY
   personalityWrapper: {
     borderRadius: 12,
     borderWidth: 0.9,
@@ -893,7 +936,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.6)',
   },
 
-  // TONE
   toneGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -923,9 +965,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
   },
-  toneCardActive: {
-    backgroundColor: '#041922',
-  },
+  toneCardActive: { backgroundColor: '#041922' },
   toneCardTitle: {
     fontSize: 16,
     fontWeight: '700',
@@ -939,20 +979,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 16,
   },
-  toneBorderLove: {
-    backgroundColor: '#00B8D9',
-  },
-  toneBorderCalm: {
-    backgroundColor: '#0288b5',
-  },
-  toneBorderSupport: {
-    backgroundColor: '#00a0ff',
-  },
-  toneBorderMotivation: {
-    backgroundColor: '#059677',
-  },
+  toneBorderLove: { backgroundColor: '#00B8D9' },
+  toneBorderCalm: { backgroundColor: '#0288b5' },
+  toneBorderSupport: { backgroundColor: '#00a0ff' },
+  toneBorderMotivation: { backgroundColor: '#059677' },
 
-  // TIMING
   toggleRow: {
     flexDirection: 'row',
     gap: 12,
@@ -980,9 +1011,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'rgba(255,255,255,0.8)',
   },
-  toggleButtonTextActive: {
-    color: '#00B8D9',
-  },
+  toggleButtonTextActive: { color: '#00B8D9' },
   selectInput: {
     borderRadius: 10,
     borderWidth: 0.8,
@@ -1015,7 +1044,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // BUTTONS
   primaryButton: {
     borderRadius: 14,
     borderWidth: 1,
@@ -1029,13 +1057,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
-  primaryButtonPressed: {
-    opacity: 0.8,
-  },
-  primaryButtonDisabled: {
-    opacity: 0.5,
-    shadowOpacity: 0,
-  },
+  primaryButtonPressed: { opacity: 0.8 },
+  primaryButtonDisabled: { opacity: 0.5, shadowOpacity: 0 },
   primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
@@ -1051,19 +1074,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
-  secondaryButtonDisabled: {
-    opacity: 0.35,
-  },
-  secondaryButtonPressed: {
-    opacity: 0.8,
-  },
+  secondaryButtonDisabled: { opacity: 0.35 },
+  secondaryButtonPressed: { opacity: 0.8 },
   secondaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
   },
 
-  // POPUP
   savePopup: {
     position: 'absolute',
     top: 0,
@@ -1094,10 +1112,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 8,
   },
-  savePopupCheck: {
-    fontSize: 22,
-    color: '#00B8D9',
-  },
+  savePopupCheck: { fontSize: 22, color: '#00B8D9' },
   savePopupText: {
     fontSize: 14,
     fontWeight: '600',
