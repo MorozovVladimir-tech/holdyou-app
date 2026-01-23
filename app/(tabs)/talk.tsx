@@ -81,7 +81,9 @@ export default function TalkScreen() {
     }
 
     if (userName) {
-      toneParts.push(`The user’s name is "${userName}". Use this name when you address them.`);
+      toneParts.push(
+        `The user’s name is "${userName}". Use this name when you address them.`
+      );
     }
 
     const tone = toneParts.length ? toneParts.join(' — ') : undefined;
@@ -125,7 +127,10 @@ export default function TalkScreen() {
   useEffect(() => {
     let isMounted = true;
 
-    if (isTalkLocked) return () => { isMounted = false; };
+    if (isTalkLocked)
+      return () => {
+        isMounted = false;
+      };
 
     (async () => {
       try {
@@ -234,19 +239,23 @@ export default function TalkScreen() {
     setDraft('');
     pendingAutoScrollRef.current = true;
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
       const payload = [
-        ...messages.map(m => ({
+        ...messages.map((m) => ({
           role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
           content: m.text,
         })),
         { role: 'user' as const, content: text },
       ];
 
-      const aiReplyText = await sendMessagesToAI(userId, payload, aiSenderProfile);
+      const aiReplyText = await sendMessagesToAI(
+        userId,
+        payload,
+        aiSenderProfile
+      );
 
       const aiMessage: ChatMessage = {
         id: `${Date.now()}-ai`,
@@ -255,7 +264,7 @@ export default function TalkScreen() {
       };
 
       pendingAutoScrollRef.current = true;
-      setMessages(prev => [...prev, aiMessage]);
+      setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.warn('Failed to send message', error);
       const fallback: ChatMessage = {
@@ -264,7 +273,7 @@ export default function TalkScreen() {
         text: "I'm having trouble answering right now, but I'm still here with you.",
       };
       pendingAutoScrollRef.current = true;
-      setMessages(prev => [...prev, fallback]);
+      setMessages((prev) => [...prev, fallback]);
     } finally {
       setIsLoading(false);
     }
@@ -297,7 +306,10 @@ export default function TalkScreen() {
 
   const getBubbleStyle = (message: ChatMessage, index: number) => {
     const isUser = message.role === 'user';
-    const base = [styles.bubble, isUser ? styles.bubbleUser : styles.bubbleHoldYou];
+    const base = [
+      styles.bubble,
+      isUser ? styles.bubbleUser : styles.bubbleHoldYou,
+    ];
 
     const isHighlighted = !isUser && lastAiIndex === index;
 
@@ -344,7 +356,9 @@ export default function TalkScreen() {
                   <Text style={styles.lockReqTitle}>Required fields:</Text>
 
                   <Text style={styles.lockReqItem}>• Name</Text>
-                  <Text style={styles.lockReqItem}>• Status (ex / partner / mom / friend)</Text>
+                  <Text style={styles.lockReqItem}>
+                    • Status (ex / partner / mom / friend)
+                  </Text>
                   <Text style={styles.lockReqItem}>• Your name</Text>
                   <Text style={styles.lockReqItem}>• Personality</Text>
                   <Text style={styles.lockReqItem}>• Tone of voice</Text>
@@ -359,13 +373,18 @@ export default function TalkScreen() {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     router.push('/(tabs)/sender');
                   }}
-                  style={({ pressed }) => [styles.lockBtn, pressed && { opacity: 0.75 }]}
+                  style={({ pressed }) => [
+                    styles.lockBtn,
+                    pressed && { opacity: 0.75 },
+                  ]}
                 >
                   <Text style={styles.lockBtnText}>Go to Sender</Text>
                   <Ionicons name="arrow-forward" size={18} color="#00B8D9" />
                 </Pressable>
 
-                <Text style={styles.lockHint}>After you save Sender, come back to Talk.</Text>
+                <Text style={styles.lockHint}>
+                  After you save Sender, come back to Talk.
+                </Text>
               </View>
             ) : (
               <>
@@ -397,7 +416,9 @@ export default function TalkScreen() {
                         <Text
                           style={[
                             styles.bubbleText,
-                            isUser ? styles.bubbleTextUser : styles.bubbleTextHoldYou,
+                            isUser
+                              ? styles.bubbleTextUser
+                              : styles.bubbleTextHoldYou,
                           ]}
                         >
                           {message.text}
@@ -408,7 +429,10 @@ export default function TalkScreen() {
                 </ScrollView>
 
                 {showScrollToBottom && (
-                  <Pressable style={styles.scrollToBottom} onPress={() => scrollToBottom(true)}>
+                  <Pressable
+                    style={styles.scrollToBottom}
+                    onPress={() => scrollToBottom(true)}
+                  >
                     <Ionicons name="arrow-down" size={18} color="#00B8D9" />
                   </Pressable>
                 )}
@@ -430,7 +454,10 @@ export default function TalkScreen() {
                   />
                   <Pressable
                     onPress={handleSend}
-                    style={({ pressed }) => [styles.sendButton, pressed && { opacity: 0.7 }]}
+                    style={({ pressed }) => [
+                      styles.sendButton,
+                      pressed && { opacity: 0.7 },
+                    ]}
                   >
                     <Ionicons name="paper-plane" size={20} color="#00B8D9" />
                   </Pressable>

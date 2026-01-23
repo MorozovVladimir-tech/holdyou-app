@@ -17,7 +17,7 @@ type TimingMode = 'specific' | 'random';
 export interface SenderProfile {
   name: string;
   myName: string;
-  specialWords: string; // НЕ обязателен
+  specialWords: string; // НЕ обязателен для gating
   status: string;
   personality: string;
   tone: Tone;
@@ -28,9 +28,25 @@ export interface SenderProfile {
 
 const TONES: readonly Tone[] = ['love', 'support', 'calm', 'motivation'];
 
-export function isSenderProfileComplete(
-  profile?: SenderProfile | null
-): boolean {
+const DEFAULT_PROFILE: SenderProfile = {
+  name: '',
+  myName: '',
+  specialWords: '',
+  status: '',
+  personality: '',
+  tone: 'support',
+  timingMode: 'specific',
+  morningTime: '08:00 AM',
+  eveningTime: '07:00 PM',
+};
+
+/**
+ * ✅ ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ: "Sender заполнен?"
+ * Минимальный флаг заполнения:
+ * name + status + myName + personality + tone
+ * (specialWords НЕ обязателен)
+ */
+export function isSenderProfileComplete(profile?: SenderProfile | null): boolean {
   if (!profile) return false;
 
   const name = (profile.name ?? '').toString().trim();
@@ -57,20 +73,6 @@ interface SenderContextValue {
   isSenderComplete: boolean;
 }
 
-const DEFAULT_PROFILE: SenderProfile = {
-  name: '',
-  myName: '',
-  specialWords: '',
-  status: '',
-  personality: '',
-  tone: 'support',
-  timingMode: 'specific',
-  morningTime: '08:00 AM',
-  eveningTime: '07:00 PM',
-};
-
-const STORAGE_KEY = 'holdyou_sender_profile_v1';
-
 const SenderContext = createContext<SenderContextValue | undefined>(undefined);
 
 // ---------- helpers: time mapping ----------
@@ -95,7 +97,7 @@ const fromSupabaseTime = (value?: string | null): string | undefined => {
   if (!value) return undefined;
 
   const [hourStr, minuteStr = '00'] = value.split(':');
-  const hours = parseInt(hourStr, 10);
+  let hours = parseInt(hourStr, 10);
   if (Number.isNaN(hours)) return undefined;
 
   const minutes = minuteStr.substring(0, 2);
@@ -116,10 +118,8 @@ const mapRowToProfile = (row: Record<string, any>): SenderProfile => ({
   personality: row.personality ?? '',
   tone: TONES.includes(row.tone) ? (row.tone as Tone) : DEFAULT_PROFILE.tone,
   timingMode: row.timing_mode === 'random' ? 'random' : DEFAULT_PROFILE.timingMode,
-  morningTime:
-    fromSupabaseTime(row.message_time_morning) ?? DEFAULT_PROFILE.morningTime,
-  eveningTime:
-    fromSupabaseTime(row.message_time_evening) ?? DEFAULT_PROFILE.eveningTime,
+  morningTime: fromSupabaseTime(row.message_time_morning) ?? DEFAULT_PROFILE.morningTime,
+  eveningTime: fromSupabaseTime(row.message_time_evening) ?? DEFAULT_PROFILE.eveningTime,
 });
 
 const buildSupabasePayload = (profile: SenderProfile, userId: string) => ({
@@ -144,13 +144,18 @@ export function SenderProvider({ children }: SenderProviderProps) {
   const { user } = useAuth();
   const userId = user?.id ?? null;
 
-  const [senderProfile, setSenderProfile] =
-    useState<SenderProfile>(DEFAULT_PROFILE);
+  const [senderProfile, setSenderProfile] = useState<SenderProfile>(DEFAULT_PROFILE);
   const [isLoaded, setIsLoaded] = useState(false);
+
+  // ✅ ключ кеша зависит от юзера (фикс утечки данных между аккаунтами)
+  const storageKey = useMemo(() => {
+    // для неавторизованного режима отдельный ключ
+    return userId ? `holdyou_sender_profile_v1:${userId}` : 'holdyou_sender_profile_v1:guest';
+  }, [userId]);
 
   const loadFromCache = useCallback(async (): Promise<SenderProfile | null> => {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      const raw = await AsyncStorage.getItem(storageKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       return { ...DEFAULT_PROFILE, ...parsed };
@@ -158,16 +163,66 @@ export function SenderProvider({ children }: SenderProviderProps) {
       console.warn('Failed to load cached sender profile', error);
       return null;
     }
-  }, []);
+  }, [storageKey]);
+
+  // ✅ при смене аккаунта: сразу сбросить локальный state, чтобы не мелькали чужие данные
+  useEffect(() => {
+    setSenderProfile(DEFAULT_PROFILE);
+    setIsLoaded(false);
+  }, [userId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    (async () => {
+      // 1) Пытаемся забрать из Supabase (если есть userId)
+      if (userId) {
+        try {
+          const { data, error } = await supabase
+            .from('sender_profiles')
+            .select('*')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (error) throw error;
+
+          if (data) {
+            const profile = mapRowToProfile(data);
+            await AsyncStorage.setItem(storageKey, JSON.stringify(profile));
+            if (isMounted) {
+              setSenderProfile(profile);
+              setIsLoaded(true);
+            }
+            return;
+          }
+        } catch (error) {
+          console.warn('Failed to fetch sender profile from Supabase', error);
+        }
+      }
+
+      // 2) Фоллбек: кеш
+      const cached = (await loadFromCache()) ?? DEFAULT_PROFILE;
+      if (isMounted) {
+        setSenderProfile(cached);
+        setIsLoaded(true);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadFromCache, storageKey, userId]);
 
   const syncProfile = useCallback(
     async (next: SenderProfile) => {
+      // локальный кеш (per-user)
       try {
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
       } catch (error) {
         console.warn('Failed to save sender profile locally', error);
       }
 
+      // если нет userId — не трогаем Supabase
       if (!userId) return;
 
       try {
@@ -183,51 +238,8 @@ export function SenderProvider({ children }: SenderProviderProps) {
         console.warn('Unexpected error syncing sender profile', error);
       }
     },
-    [userId]
+    [storageKey, userId]
   );
-
-  useEffect(() => {
-    let isMounted = true;
-
-    (async () => {
-      let nextProfile: SenderProfile | null = null;
-
-      // 1) Supabase (если авторизован)
-      if (userId) {
-        try {
-          const { data, error } = await supabase
-            .from('sender_profiles')
-            .select('*')
-            .eq('user_id', userId)
-            .maybeSingle();
-
-          if (error) throw error;
-
-          if (data) {
-            nextProfile = mapRowToProfile(data);
-            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextProfile));
-          }
-        } catch (error) {
-          console.warn('Failed to fetch sender profile from Supabase', error);
-        }
-      }
-
-      // 2) Cache fallback
-      if (!nextProfile) {
-        nextProfile = (await loadFromCache()) ?? DEFAULT_PROFILE;
-      }
-
-      // ✅ ВАЖНО: setSenderProfile получает только SenderProfile (не null)
-      if (isMounted) {
-        setSenderProfile(nextProfile);
-        setIsLoaded(true);
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [loadFromCache, userId]);
 
   const updateSenderProfile = useCallback(
     (patch: Partial<SenderProfile>) => {
@@ -260,9 +272,7 @@ export function SenderProvider({ children }: SenderProviderProps) {
     [senderProfile, updateSenderProfile, resetSenderProfile, isLoaded, isSenderComplete]
   );
 
-  return (
-    <SenderContext.Provider value={value}>{children}</SenderContext.Provider>
-  );
+  return <SenderContext.Provider value={value}>{children}</SenderContext.Provider>;
 }
 
 export function useSender(): SenderContextValue {
