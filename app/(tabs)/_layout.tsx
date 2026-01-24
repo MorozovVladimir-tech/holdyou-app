@@ -24,7 +24,6 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 
 import { useTalk } from '../context/TalkContext';
-import { useSender } from '../context/SenderContext';
 
 // ВИДЕО-ОРБ (orb_5)
 const orbVideo = require('../../assets/videos/orb_5.mp4');
@@ -33,9 +32,6 @@ export default function TabsLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const { isLoading } = useTalk(); // AI отвечает
-
-  // ✅ Sender gating
-  const { isSenderComplete } = useSender();
 
   // Базовое дыхание орба
   const scale = useSharedValue(0.9);
@@ -97,14 +93,6 @@ export default function TabsLayout() {
     });
   }, [typingGlow, isLoading]);
 
-  // ✅ Авто-редирект: если Sender не заполнен, Talk не должен открываться вообще
-  useEffect(() => {
-    if (!pathname) return;
-    if (!isSenderComplete && pathname.includes('/talk')) {
-      router.replace('/(tabs)/sender' as never);
-    }
-  }, [pathname, isSenderComplete, router]);
-
   // Итоговая анимация орба (масштаб + внешний glow)
   const orbAnimatedStyle = useAnimatedStyle(() => {
     const totalGlow = tapGlow.value + typingGlow.value;
@@ -120,9 +108,7 @@ export default function TabsLayout() {
   // Внутреннее свечение (поверх видео, внутри круга)
   const innerGlowStyle = useAnimatedStyle(() => {
     const opacity = typingGlow.value * 1.4; // максимум ~0.35
-    return {
-      opacity,
-    };
+    return { opacity };
   });
 
   const getActiveTab = () => {
@@ -155,26 +141,10 @@ export default function TabsLayout() {
     );
   };
 
-  const handleTabPress = async (tabId: string) => {
-    if (tabId === 'talk') {
-      if (!isSenderComplete) {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        router.push('/(tabs)/sender' as never);
-        return;
-      }
-      router.push('/(tabs)/talk' as never);
-      return;
-    }
-
-    if (tabId === 'sender') {
-      router.push('/(tabs)/sender' as never);
-      return;
-    }
-
-    if (tabId === 'about') {
-      router.push('/(tabs)/about' as never);
-      return;
-    }
+  const handleTabPress = (tabId: string) => {
+    if (tabId === 'talk') router.push('/(tabs)/talk' as never);
+    else if (tabId === 'sender') router.push('/(tabs)/sender' as never);
+    else if (tabId === 'about') router.push('/(tabs)/about' as never);
   };
 
   return (
@@ -199,13 +169,12 @@ export default function TabsLayout() {
               isMuted
               shouldPlay
             />
-            {/* внутреннее свечение, когда AI отвечает */}
             <Animated.View style={[styles.orbInnerGlow, innerGlowStyle]} />
           </Animated.View>
         </Pressable>
       </View>
 
-      {/* Content Area with Tabs — двигаем её относительно клавиатуры */}
+      {/* Content Area with Tabs */}
       <KeyboardAvoidingView
         style={styles.contentArea}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -239,12 +208,7 @@ export default function TabsLayout() {
                   size={24}
                   color={isActive ? '#00B8D9' : 'rgba(255,255,255,0.6)'}
                 />
-                <Text
-                  style={[
-                    styles.tabLabel,
-                    isActive && styles.tabLabelActive,
-                  ]}
-                >
+                <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
                   {tab.label}
                 </Text>
               </Pressable>
@@ -284,13 +248,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 0,
-    paddingBottom: 4,   // было 6
-    marginTop: -4,      // было -3
+    paddingBottom: 4,
+    marginTop: -4,
   },
   orbVideoWrapper: {
-    width: 170,         // было 210
-    height: 170,        // было 210
-    borderRadius: 85,   // было 105
+    width: 170,
+    height: 170,
+    borderRadius: 85,
     overflow: 'hidden',
   },
   orbVideo: {
@@ -303,7 +267,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: 85,   // под новый размер
+    borderRadius: 85,
     backgroundColor: 'rgba(0, 184, 217, 0.4)',
   },
 

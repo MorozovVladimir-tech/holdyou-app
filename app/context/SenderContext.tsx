@@ -17,7 +17,7 @@ type TimingMode = 'specific' | 'random';
 export interface SenderProfile {
   name: string;
   myName: string;
-  specialWords: string; // НЕ обязателен для gating
+  specialWords: string; // НЕ обязательное
   status: string;
   personality: string;
   tone: Tone;
@@ -26,7 +26,13 @@ export interface SenderProfile {
   eveningTime?: string;
 }
 
-const TONES: readonly Tone[] = ['love', 'support', 'calm', 'motivation'];
+interface SenderContextValue {
+  senderProfile: SenderProfile;
+  updateSenderProfile: (patch: Partial<SenderProfile>) => void;
+  resetSenderProfile: () => void;
+  isLoaded: boolean;
+  isSenderComplete: boolean;
+}
 
 const DEFAULT_PROFILE: SenderProfile = {
   name: '',
@@ -40,43 +46,15 @@ const DEFAULT_PROFILE: SenderProfile = {
   eveningTime: '07:00 PM',
 };
 
-/**
- * ✅ ЕДИНЫЙ ИСТОЧНИК ИСТИНЫ: "Sender заполнен?"
- * Минимальный флаг заполнения:
- * name + status + myName + personality + tone
- * (specialWords НЕ обязателен)
- */
-export function isSenderProfileComplete(profile?: SenderProfile | null): boolean {
-  if (!profile) return false;
-
-  const name = (profile.name ?? '').toString().trim();
-  const status = (profile.status ?? '').toString().trim();
-  const myName = (profile.myName ?? '').toString().trim();
-  const personality = (profile.personality ?? '').toString().trim();
-
-  const hasValidTone = TONES.includes(profile.tone);
-
-  return (
-    name.length > 0 &&
-    status.length > 0 &&
-    myName.length > 0 &&
-    personality.length > 0 &&
-    hasValidTone
-  );
-}
-
-interface SenderContextValue {
-  senderProfile: SenderProfile;
-  updateSenderProfile: (patch: Partial<SenderProfile>) => void;
-  resetSenderProfile: () => void;
-  isLoaded: boolean;
-  isSenderComplete: boolean;
-}
+const TONES: readonly Tone[] = ['love', 'support', 'calm', 'motivation'];
+const STORAGE_KEY_BASE = 'holdyou_sender_profile_v2';
 
 const SenderContext = createContext<SenderContextValue | undefined>(undefined);
 
-// ---------- helpers: time mapping ----------
+const storageKeyFor = (userId: string | null) =>
+  `${STORAGE_KEY_BASE}_${userId ?? 'anon'}`;
 
+// ---------- helpers: time mapping ----------
 const toSupabaseTime = (value?: string): string | null => {
   if (!value) return null;
 
@@ -108,8 +86,7 @@ const fromSupabaseTime = (value?: string | null): string | undefined => {
   return `${displayHour.toString().padStart(2, '0')}:${minutes} ${period}`;
 };
 
-// ---------- mapping Supabase <-> SenderProfile ----------
-
+// ---------- Supabase <-> SenderProfile ----------
 const mapRowToProfile = (row: Record<string, any>): SenderProfile => ({
   name: row.name ?? '',
   myName: row.user_name ?? '',
@@ -136,9 +113,30 @@ const buildSupabasePayload = (profile: SenderProfile, userId: string) => ({
   updated_at: new Date().toISOString(),
 });
 
-type SenderProviderProps = {
-  children: React.ReactNode;
-};
+/**
+ * Минимальный флаг заполнения:
+ * name + status + myName + personality + tone
+ * specialWords НЕ обязателен
+ */
+export function isSenderProfileComplete(profile?: SenderProfile | null): boolean {
+  if (!profile) return false;
+
+  const name = (profile.name ?? '').trim();
+  const status = (profile.status ?? '').trim();
+  const myName = (profile.myName ?? '').trim();
+  const personality = (profile.personality ?? '').trim();
+  const hasValidTone = TONES.includes(profile.tone);
+
+  return (
+    name.length > 0 &&
+    status.length > 0 &&
+    myName.length > 0 &&
+    personality.length > 0 &&
+    hasValidTone
+  );
+}
+
+type SenderProviderProps = { children: React.ReactNode };
 
 export function SenderProvider({ children }: SenderProviderProps) {
   const { user } = useAuth();
@@ -147,15 +145,9 @@ export function SenderProvider({ children }: SenderProviderProps) {
   const [senderProfile, setSenderProfile] = useState<SenderProfile>(DEFAULT_PROFILE);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // ✅ ключ кеша зависит от юзера (фикс утечки данных между аккаунтами)
-  const storageKey = useMemo(() => {
-    // для неавторизованного режима отдельный ключ
-    return userId ? `holdyou_sender_profile_v1:${userId}` : 'holdyou_sender_profile_v1:guest';
-  }, [userId]);
-
-  const loadFromCache = useCallback(async (): Promise<SenderProfile | null> => {
+  const loadFromCache = useCallback(async (key: string): Promise<SenderProfile | null> => {
     try {
-      const raw = await AsyncStorage.getItem(storageKey);
+      const raw = await AsyncStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       return { ...DEFAULT_PROFILE, ...parsed };
@@ -163,47 +155,75 @@ export function SenderProvider({ children }: SenderProviderProps) {
       console.warn('Failed to load cached sender profile', error);
       return null;
     }
-  }, [storageKey]);
+  }, []);
 
-  // ✅ при смене аккаунта: сразу сбросить локальный state, чтобы не мелькали чужие данные
-  useEffect(() => {
-    setSenderProfile(DEFAULT_PROFILE);
-    setIsLoaded(false);
-  }, [userId]);
+  const saveToCache = useCallback(async (key: string, next: SenderProfile) => {
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(next));
+    } catch (error) {
+      console.warn('Failed to save sender profile locally', error);
+    }
+  }, []);
 
+  const syncToSupabase = useCallback(async (uid: string, next: SenderProfile) => {
+    try {
+      const payload = buildSupabasePayload(next, uid);
+      const { error } = await supabase.from('sender_profiles').upsert(payload, {
+        onConflict: 'user_id',
+      });
+      if (error) console.warn('Failed to sync sender profile to Supabase', error);
+    } catch (error) {
+      console.warn('Unexpected error syncing sender profile', error);
+    }
+  }, []);
+
+  // 🔥 КРИТИЧНО: при смене userId грузим ПРОФИЛЬ ТОЛЬКО ЭТОГО userId (и кеш тоже per-user)
   useEffect(() => {
     let isMounted = true;
+    const key = storageKeyFor(userId);
+
+    setIsLoaded(false);
 
     (async () => {
-      // 1) Пытаемся забрать из Supabase (если есть userId)
-      if (userId) {
-        try {
-          const { data, error } = await supabase
-            .from('sender_profiles')
-            .select('*')
-            .eq('user_id', userId)
-            .maybeSingle();
+      // 0) мгновенно сбросим состояние, чтобы не мигали чужие данные
+      if (isMounted) setSenderProfile(DEFAULT_PROFILE);
 
-          if (error) throw error;
-
-          if (data) {
-            const profile = mapRowToProfile(data);
-            await AsyncStorage.setItem(storageKey, JSON.stringify(profile));
-            if (isMounted) {
-              setSenderProfile(profile);
-              setIsLoaded(true);
-            }
-            return;
-          }
-        } catch (error) {
-          console.warn('Failed to fetch sender profile from Supabase', error);
+      // 1) если нет userId — грузим anon кеш
+      if (!userId) {
+        const cached = (await loadFromCache(key)) ?? DEFAULT_PROFILE;
+        if (isMounted) {
+          setSenderProfile(cached);
+          setIsLoaded(true);
         }
+        return;
       }
 
-      // 2) Фоллбек: кеш
-      const cached = (await loadFromCache()) ?? DEFAULT_PROFILE;
+      // 2) есть userId — пробуем Supabase → иначе кеш этого userId → иначе default
+      let profile: SenderProfile | null = null;
+
+      try {
+        const { data, error } = await supabase
+          .from('sender_profiles')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (error) throw error;
+
+        if (data) {
+          profile = mapRowToProfile(data);
+          await saveToCache(key, profile);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch sender profile from Supabase', error);
+      }
+
+      if (!profile) {
+        profile = (await loadFromCache(key)) ?? DEFAULT_PROFILE;
+      }
+
       if (isMounted) {
-        setSenderProfile(cached);
+        setSenderProfile(profile);
         setIsLoaded(true);
       }
     })();
@@ -211,55 +231,39 @@ export function SenderProvider({ children }: SenderProviderProps) {
     return () => {
       isMounted = false;
     };
-  }, [loadFromCache, storageKey, userId]);
-
-  const syncProfile = useCallback(
-    async (next: SenderProfile) => {
-      // локальный кеш (per-user)
-      try {
-        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
-      } catch (error) {
-        console.warn('Failed to save sender profile locally', error);
-      }
-
-      // если нет userId — не трогаем Supabase
-      if (!userId) return;
-
-      try {
-        const payload = buildSupabasePayload(next, userId);
-        const { error } = await supabase
-          .from('sender_profiles')
-          .upsert(payload, { onConflict: 'user_id' });
-
-        if (error) {
-          console.warn('Failed to sync sender profile to Supabase', error);
-        }
-      } catch (error) {
-        console.warn('Unexpected error syncing sender profile', error);
-      }
-    },
-    [storageKey, userId]
-  );
+  }, [userId, loadFromCache, saveToCache]);
 
   const updateSenderProfile = useCallback(
     (patch: Partial<SenderProfile>) => {
-      setSenderProfile((prev) => {
-        const next = { ...prev, ...patch };
-        syncProfile(next);
+      const key = storageKeyFor(userId);
+
+      setSenderProfile(prev => {
+        const next: SenderProfile = { ...prev, ...patch };
+
+        // кеш всегда
+        saveToCache(key, next);
+
+        // Supabase только если есть userId
+        if (userId) syncToSupabase(userId, next);
+
         return next;
       });
     },
-    [syncProfile]
+    [userId, saveToCache, syncToSupabase]
   );
 
   const resetSenderProfile = useCallback(() => {
-    setSenderProfile(DEFAULT_PROFILE);
-    syncProfile(DEFAULT_PROFILE);
-  }, [syncProfile]);
+    const key = storageKeyFor(userId);
 
-  const isSenderComplete = useMemo(() => {
-    return isSenderProfileComplete(senderProfile);
-  }, [senderProfile]);
+    setSenderProfile(DEFAULT_PROFILE);
+    saveToCache(key, DEFAULT_PROFILE);
+    if (userId) syncToSupabase(userId, DEFAULT_PROFILE);
+  }, [userId, saveToCache, syncToSupabase]);
+
+  const isSenderComplete = useMemo(
+    () => isSenderProfileComplete(senderProfile),
+    [senderProfile]
+  );
 
   const value = useMemo(
     () => ({
@@ -277,8 +281,6 @@ export function SenderProvider({ children }: SenderProviderProps) {
 
 export function useSender(): SenderContextValue {
   const context = useContext(SenderContext);
-  if (!context) {
-    throw new Error('useSender must be used within SenderProvider');
-  }
+  if (!context) throw new Error('useSender must be used within SenderProvider');
   return context;
 }
