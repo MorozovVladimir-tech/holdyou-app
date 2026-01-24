@@ -369,9 +369,7 @@ export default function TalkScreen() {
                 <View style={styles.lockOverlay} pointerEvents="auto">
                   <View style={styles.lockCard}>
                     <Text style={styles.lockTitle}>Talk is locked</Text>
-                    <Text style={styles.lockText}>
-                      Fill Sender and press Save.
-                    </Text>
+                    <Text style={styles.lockText}>Fill Sender and press Save.</Text>
 
                     <View style={styles.lockReqBox}>
                       <Text style={styles.lockReqTitle}>Required fields:</Text>
@@ -415,23 +413,78 @@ const styles = StyleSheet.create({
 
   chatGradientWrapper: { flex: 1, width: '100%', borderRadius: 12 },
   chatGradient: { flex: 1, borderRadius: 12, padding: 0.9 },
-  chatContainer: { flex: 1, borderRadius: 10, backgroundColor: '#000000', overflow: 'hidden', width: '100%', position: 'relative' },
+  chatContainer: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: '#000000',
+    overflow: 'hidden',
+    width: '100%',
+    position: 'relative',
+  },
 
   chatScroll: { flex: 1 },
   chatContent: { paddingHorizontal: 12, paddingVertical: 8 },
 
-  chatHint: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginTop: 8, lineHeight: 18 },
+  chatHint: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.6)',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+  },
 
   bubble: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12, marginBottom: 6, maxWidth: '85%' },
   bubbleUser: { alignSelf: 'flex-end', backgroundColor: '#12384C' },
   bubbleHoldYou: { alignSelf: 'flex-start', backgroundColor: '#085B6A' },
   bubbleText: { fontSize: 14, lineHeight: 20, color: 'rgba(255,255,255,0.95)' },
 
-  scrollToBottom: { position: 'absolute', right: 16, bottom: 58, width: 32, height: 32, borderRadius: 16, borderWidth: 0.5, borderColor: 'rgba(0,184,217,0.7)', backgroundColor: 'rgba(0,0,0,0.85)', alignItems: 'center', justifyContent: 'center' },
+  scrollToBottom: {
+    position: 'absolute',
+    right: 16,
+    bottom: 58,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,184,217,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  inputRow: { flexDirection: 'row', alignItems: 'center', borderTopWidth: 0.5, borderTopColor: '#00B8D9', paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#000000' },
-  chatInput: { flex: 1, borderRadius: 6, borderWidth: 0.5, borderColor: '#00B8D9', backgroundColor: '#1A1A1A', paddingHorizontal: 10, paddingVertical: 8, fontSize: 13, fontWeight: '500', color: '#FFFFFF', minHeight: 38 },
-  sendButton: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 0.5, borderColor: '#00B8D9', backgroundColor: 'rgba(0, 0, 0, 0.3)', alignItems: 'center', justifyContent: 'center' },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: 0.5,
+    borderTopColor: '#00B8D9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#000000',
+  },
+  chatInput: {
+    flex: 1,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: '#00B8D9',
+    backgroundColor: '#1A1A1A',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    minHeight: 38,
+  },
+  sendButton: {
+    marginLeft: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 0.5,
+    borderColor: '#00B8D9',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // ✅ overlay
   lockOverlay: {
@@ -451,12 +504,40 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   lockTitle: { fontSize: 18, fontWeight: '700', color: '#00B8D9', textAlign: 'center', marginBottom: 6 },
-  lockText: { fontSize: 13, fontWeight: '500', color: 'rgba(255,255,255,0.85)', textAlign: 'center', lineHeight: 18, marginBottom: 12 },
+  lockText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.85)',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
 
-  lockReqBox: { width: '100%', borderRadius: 12, borderWidth: 0.6, borderColor: 'rgba(0,184,217,0.65)', backgroundColor: 'rgba(0,0,0,0.35)', paddingHorizontal: 12, paddingVertical: 10, marginBottom: 14 },
+  // ✅ ВНУТРЕННЮЮ РАМКУ УБРАЛИ (только border)
+  lockReqBox: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
   lockReqTitle: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.9)', marginBottom: 6 },
   lockReqItem: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.78)', lineHeight: 18 },
 
-  lockBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 0.5, borderColor: '#00B8D9', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', gap: 8 as any },
+  lockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: '#00B8D9',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    gap: 8 as any,
+  },
   lockBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 });

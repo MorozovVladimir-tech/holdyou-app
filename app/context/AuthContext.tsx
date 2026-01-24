@@ -77,7 +77,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      // ловим любые изменения токенов/сессии
+      if (!isMounted) return;
       setUser(session?.user ?? null);
     });
 
@@ -88,7 +88,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const refreshUser = async (): Promise<User | null> => {
-    // ✅ FIX: refreshSession() только если реально есть session
     const {
       data: { session },
       error: sessionError,
@@ -100,7 +99,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
 
     if (!session) {
-      // нет сессии — нечего рефрешить
       setUser(null);
       return null;
     }
@@ -108,7 +106,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       await supabase.auth.refreshSession();
     } catch (e) {
-      // может ругаться в некоторых edge-case — не валим приложение
       console.warn('refreshSession warning', e);
     }
 
@@ -126,14 +123,22 @@ export function AuthProvider({ children }: AuthProviderProps) {
     email: string,
     password: string
   ): Promise<User | null> => {
+    const cleanEmail = (email ?? '').trim();
+
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
+      email: cleanEmail,
       password,
     });
 
     if (error) {
-      console.warn('loginWithEmail error', error);
-      throw error;
+      // ⚠️ Это и есть твой лог "Invalid login credentials"
+      console.warn('loginWithEmail error', {
+        message: error.message,
+        status: (error as any)?.status,
+        name: (error as any)?.name,
+        email: cleanEmail,
+      });
+      return null;
     }
 
     setUser(data.user ?? null);
@@ -146,7 +151,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     password: string
   ): Promise<User | null> => {
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: (email ?? '').trim(),
       password,
       options: {
         data: { full_name: fullName },
@@ -161,16 +166,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       throw error;
     }
 
-    // При включенном Confirm Email user может быть null — это нормально.
     setUser(data.user ?? null);
     return data.user ?? null;
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    // ✅ письмо → Supabase verify → веб-страница → deep link в приложение
     const redirectTo = 'https://holdyou.app/auth/reset-password';
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await supabase.auth.resetPasswordForEmail((email ?? '').trim(), {
       redirectTo,
     });
 

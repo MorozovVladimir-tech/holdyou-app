@@ -100,8 +100,9 @@ export default function SenderScreen() {
     }).start();
   };
 
-  // ✅ Новый минимальный флаг заполнения (как ты выбрал):
-  // name + status + myName + specialWords(>=1) + personality + tone
+  // ✅ Новый минимальный флаг заполнения:
+  // name + status + myName + personality + tone
+  // ❗ Special words — OPTIONAL (не участвуют в unlock Talk)
   const isComplete = useMemo(() => {
     const n = name.trim();
     const st = status.trim();
@@ -109,18 +110,14 @@ export default function SenderScreen() {
     const p = personality.trim();
     const t = (tone ?? '').trim();
 
-    const hasSpecialWords = Array.isArray(specialWordsList)
-      && specialWordsList.map(w => w.trim()).filter(Boolean).length > 0;
-
     return (
       n.length > 0 &&
       st.length > 0 &&
       mn.length > 0 &&
-      hasSpecialWords &&
       p.length > 0 &&
       t.length > 0
     );
-  }, [name, status, myName, specialWordsList, personality, tone]);
+  }, [name, status, myName, personality, tone]);
 
   // Подтягиваем профиль
   useEffect(() => {
@@ -148,6 +145,7 @@ export default function SenderScreen() {
     setTimingMode(senderProfile.timingMode ?? 'specific');
 
     // ✅ "замороженным" считаем ТОЛЬКО если профиль реально complete
+    // ❗ Special words НЕ влияют на isLocked (они optional)
     const profAny = senderProfile as any;
     const profName = (profAny.name ?? '').toString().trim();
     const profStatus = (profAny.status ?? '').toString().trim();
@@ -155,21 +153,10 @@ export default function SenderScreen() {
     const profPersonality = (profAny.personality ?? '').toString().trim();
     const profTone = (profAny.tone ?? '').toString().trim();
 
-    const profSpecialWords =
-      typeof profAny.specialWords === 'string'
-        ? profAny.specialWords
-            .split(',')
-            .map((w: string) => w.trim())
-            .filter(Boolean)
-        : [];
-
-    const profHasSpecial = profSpecialWords.length > 0;
-
     const hasData =
       profName.length > 0 &&
       profStatus.length > 0 &&
       profMyName.length > 0 &&
-      profHasSpecial &&
       profPersonality.length > 0 &&
       profTone.length > 0;
 
@@ -214,7 +201,7 @@ export default function SenderScreen() {
       name: name.trim(),
       myName: myName.trim(),
       status: status.trim(),
-      specialWords,
+      specialWords, // ✅ сохраняем как раньше (для ИИ)
       personality: personality.trim(),
       morningTime,
       eveningTime,
