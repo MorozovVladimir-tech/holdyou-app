@@ -13,6 +13,13 @@ import { SenderProvider } from './context/SenderContext';
 import { TalkProvider } from './context/TalkContext';
 import { SubscriptionProvider } from './context/SubscriptionContext';
 
+type PushData = {
+  screen?: 'talk' | 'sender' | 'profile';
+  userId?: string;
+  messageId?: string;
+  source?: string;
+};
+
 Notifications.setNotificationHandler({
   handleNotification: async () =>
     ({
@@ -63,6 +70,62 @@ function DeepLinkGate() {
   return null;
 }
 
+function PushGate() {
+  const router = useRouter();
+
+  const handlePushTap = (data: PushData | null | undefined) => {
+    const screen = data?.screen;
+
+    if (screen === 'talk') {
+      router.push('/(tabs)/talk' as any);
+      return;
+    }
+
+    if (screen === 'sender') {
+      router.push('/(tabs)/sender' as any);
+      return;
+    }
+
+    // дефолт: ведём в Talk
+    router.push('/(tabs)/talk' as any);
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1) Если приложение было убито и открыто тапом по пушу
+    (async () => {
+      try {
+        const last = await Notifications.getLastNotificationResponseAsync();
+        const data =
+          (last?.notification?.request?.content?.data as PushData | undefined) ?? undefined;
+
+        if (isMounted && data) handlePushTap(data);
+      } catch (e) {
+        console.warn('getLastNotificationResponseAsync error', e);
+      }
+    })();
+
+    // 2) Если приложение было в фоне и пользователь тапнул по пушу
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        const data = response.notification.request.content.data as PushData | undefined;
+        handlePushTap(data);
+      } catch (e) {
+        console.warn('notification response listener error', e);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      sub.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return null;
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
@@ -73,16 +136,14 @@ export default function RootLayout() {
           <SubscriptionProvider>
             <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
               <DeepLinkGate />
+              <PushGate />
 
               <Stack initialRouteName="onboarding">
                 <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
                 {/* ✅ ВАЖНО: регистрируем РЕАЛЬНЫЙ экран reset-цепочки */}
-                <Stack.Screen
-                  name="(reset)/reset-password"
-                  options={{ headerShown: false }}
-                />
+                <Stack.Screen name="(reset)/reset-password" options={{ headerShown: false }} />
 
                 <Stack.Screen
                   name="modal"
