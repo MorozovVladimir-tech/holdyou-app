@@ -50,6 +50,8 @@ export default function Login() {
   // локальный loading на действия
   const [actionLoading, setActionLoading] = useState(false);
 
+  const auth = useAuth();
+
   const {
     loginWithEmail,
     registerWithEmail,
@@ -58,7 +60,7 @@ export default function Login() {
     authLoading,
     isAuthenticated,
     isEmailConfirmed,
-  } = useAuth();
+  } = auth;
 
   const pathname = usePathname();
 
@@ -125,8 +127,6 @@ export default function Login() {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const tryRefreshAndEnter = async (source: 'deeplink' | 'resume') => {
-    // Если модалка confirm открыта — НЕ закрываем сразу.
-    // Сначала проверим подтверждение, потом закроем и пустим внутрь.
     setErrorMessage(null);
 
     try {
@@ -147,19 +147,16 @@ export default function Login() {
         return;
       }
 
-      // Если не подтверждено — если мы пришли по диплинку/резюму, покажем подсказку, но оставим confirm.
       if (modalType === 'confirm') {
         setErrorMessage('Email is not confirmed yet. Please check your inbox.');
       } else if (source === 'deeplink' || source === 'resume') {
-        // Пользователь мог вернуться без открытия confirm модалки — не насилуем UI.
-        // Просто оставим на текущем экране.
+        // no-op
       }
     } catch (error: unknown) {
       const message =
         (error as { message?: string })?.message ??
         'Could not verify confirmation. Please try again.';
       console.log('auto-confirm-check error', error);
-      // Показываем ошибку только если confirm модалка открыта, иначе не шумим.
       if (modalType === 'confirm') setErrorMessage(message);
     }
   };
@@ -167,10 +164,7 @@ export default function Login() {
   // 1) Ловим deep link holdyou://confirmed
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
-      // нас интересует только confirmed (а позже добавим reset-password)
       if (url.startsWith('holdyou://confirmed')) {
-        // Пользователь подтвердил на вебе → мы в приложении
-        // Открываем confirm-модалку (если вдруг не открыта) и делаем refresh
         if (modalType !== 'confirm') {
           setModalType('confirm');
         }
@@ -180,7 +174,6 @@ export default function Login() {
 
     const sub = Linking.addEventListener('url', onUrl);
 
-    // Также обработаем cold start (если приложение открыли диплинком)
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
@@ -207,12 +200,10 @@ export default function Login() {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
 
-      // только переход background/inactive -> active
       if (
         (prev === 'background' || prev === 'inactive') &&
         nextState === 'active'
       ) {
-        // Если пользователь в процессе подтверждения — авто-проверка
         if (modalType === 'confirm') {
           tryRefreshAndEnter('resume');
         }
@@ -225,12 +216,41 @@ export default function Login() {
 
   // =========================
 
-  const handleAppleSignIn = () => {
-    console.log('Apple sign-in pressed');
+  const handleAppleSignIn = async () => {
+    setErrorMessage(null);
+    setActionLoading(true);
+    try {
+      const fn = (auth as any)?.signInWithApple as undefined | (() => Promise<void>);
+      if (!fn) {
+        setErrorMessage('Apple sign-in is not configured yet.');
+        return;
+      }
+      await fn();
+      // дальше сессию подхватит onAuthStateChange, а этот экран сам редиректнет в Talk
+    } catch (e: any) {
+      console.log('apple sign-in error', e);
+      setErrorMessage(e?.message ?? 'Apple sign-in failed. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleGoogleSignIn = () => {
-    console.log('Google sign-in pressed');
+  const handleGoogleSignIn = async () => {
+    setErrorMessage(null);
+    setActionLoading(true);
+    try {
+      const fn = (auth as any)?.signInWithGoogle as undefined | (() => Promise<void>);
+      if (!fn) {
+        setErrorMessage('Google sign-in is not configured yet.');
+        return;
+      }
+      await fn();
+    } catch (e: any) {
+      console.log('google sign-in error', e);
+      setErrorMessage(e?.message ?? 'Google sign-in failed. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const renderInput = (
@@ -285,9 +305,6 @@ export default function Login() {
 
       if (!confirmed) {
         setPendingEmail(email);
-
-        // ✅ ВАЖНО: НЕ делаем logout() здесь!
-        // Иначе кнопка “I’ve confirmed” не сможет refreshUser() и проверить статус.
         setModalType('confirm');
         return;
       }
@@ -311,11 +328,8 @@ export default function Login() {
     const email = registerEmail.trim();
     const name = registerName.trim();
 
-    // ✅ локальные проверки до запроса
     if (registerPassword.length < MIN_PASSWORD_LEN) {
-      setErrorMessage(
-        `Password must be at least ${MIN_PASSWORD_LEN} characters`
-      );
+      setErrorMessage(`Password must be at least ${MIN_PASSWORD_LEN} characters`);
       return;
     }
 
@@ -328,10 +342,7 @@ export default function Login() {
 
     try {
       setPendingEmail(email);
-
       await registerWithEmail(name, email, registerPassword);
-
-      // ❌ не логиним автоматически — ждём подтверждения
       setModalType('confirm');
     } catch (error: unknown) {
       const message =
@@ -445,22 +456,12 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setModalType('reset')}
-            disabled={actionLoading}
-          >
-            <Text style={[styles.modalLink, styles.modalLinkAccent]}>
-              Forgot password?
-            </Text>
+          <Pressable onPress={() => setModalType('reset')} disabled={actionLoading}>
+            <Text style={[styles.modalLink, styles.modalLinkAccent]}>Forgot password?</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setModalType('register')}
-            disabled={actionLoading}
-          >
-            <Text style={styles.modalLinkHighlight}>
-              Don’t have an account? Register
-            </Text>
+          <Pressable onPress={() => setModalType('register')} disabled={actionLoading}>
+            <Text style={styles.modalLinkHighlight}>Don’t have an account? Register</Text>
           </Pressable>
         </View>
       );
@@ -500,13 +501,8 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setModalType('login')}
-            disabled={actionLoading}
-          >
-            <Text style={styles.modalLinkHighlight}>
-              Remembered your password? Log in
-            </Text>
+          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+            <Text style={styles.modalLinkHighlight}>Remembered your password? Log in</Text>
           </Pressable>
         </View>
       );
@@ -520,7 +516,6 @@ export default function Login() {
           {renderInput('Full name', registerName, setRegisterName)}
           {renderInput('Email', registerEmail, setRegisterEmail)}
 
-          {/* Password + helper */}
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>Password</Text>
             <TextInput
@@ -532,17 +527,11 @@ export default function Login() {
               secureTextEntry
               autoCapitalize="none"
             />
-            <Text
-              style={[
-                styles.helperText,
-                registerPasswordTooShort && styles.helperTextError,
-              ]}
-            >
+            <Text style={[styles.helperText, registerPasswordTooShort && styles.helperTextError]}>
               At least {MIN_PASSWORD_LEN} characters
             </Text>
           </View>
 
-          {/* Confirm password */}
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>Confirm password</Text>
             <TextInput
@@ -589,13 +578,8 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>Back</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setModalType('login')}
-            disabled={actionLoading}
-          >
-            <Text style={styles.modalLinkHighlight}>
-              Already have an account? Log in
-            </Text>
+          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+            <Text style={styles.modalLinkHighlight}>Already have an account? Log in</Text>
           </Pressable>
         </View>
       );
@@ -640,13 +624,8 @@ export default function Login() {
             <Text style={styles.modalSecondaryText}>I’ve confirmed</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setModalType('login')}
-            disabled={actionLoading}
-          >
-            <Text style={[styles.modalLink, styles.modalLinkAccent]}>
-              Back to login
-            </Text>
+          <Pressable onPress={() => setModalType('login')} disabled={actionLoading}>
+            <Text style={[styles.modalLink, styles.modalLinkAccent]}>Back to login</Text>
           </Pressable>
         </View>
       );
@@ -676,6 +655,7 @@ export default function Login() {
         onPress: () => setModalType('login'),
       },
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
