@@ -7,7 +7,11 @@ import React, {
   useState,
 } from 'react';
 import type { User } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabaseClient';
+
+WebBrowser.maybeCompleteAuthSession();
 
 function calcIsEmailConfirmed(u: User | null): boolean {
   if (!u) return false;
@@ -24,10 +28,7 @@ interface AuthContextValue {
   user: User | null;
   authLoading: boolean;
 
-  // true если есть юзер в сессии (даже если он не подтвердил email)
   isAuthenticated: boolean;
-
-  // true если email подтвержден
   isEmailConfirmed: boolean;
 
   loginWithEmail: (email: string, password: string) => Promise<User | null>;
@@ -38,9 +39,11 @@ interface AuthContextValue {
   ) => Promise<User | null>;
   sendPasswordReset: (email: string) => Promise<void>;
   logout: () => Promise<void>;
-
-  // чтобы после “I’ve confirmed” проверить актуальный статус подтверждения
   refreshUser: () => Promise<User | null>;
+
+  // ✅ OAuth
+  signInWithApple: () => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -53,6 +56,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
+  // ======================
+  // INIT SESSION
+  // ======================
   useEffect(() => {
     let isMounted = true;
 
@@ -60,15 +66,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       try {
         const {
           data: { session },
-          error,
         } = await supabase.auth.getSession();
 
-        if (error) console.warn('getSession error', error);
         if (!isMounted) return;
-
         setUser(session?.user ?? null);
-      } catch (error) {
-        console.warn('Unexpected getSession error', error);
+      } catch (e) {
+        console.warn('getSession error', e);
       } finally {
         if (isMounted) setAuthLoading(false);
       }
@@ -87,57 +90,33 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, []);
 
+  // ======================
+  // HELPERS
+  // ======================
   const refreshUser = async (): Promise<User | null> => {
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-
-    if (sessionError) {
-      console.warn('refreshUser getSession error', sessionError);
-      return null;
-    }
-
-    if (!session) {
-      setUser(null);
-      return null;
-    }
-
-    try {
-      await supabase.auth.refreshSession();
-    } catch (e) {
-      console.warn('refreshSession warning', e);
-    }
-
     const { data, error } = await supabase.auth.getUser();
     if (error) {
-      console.warn('refreshUser getUser error', error);
+      console.warn('refreshUser error', error);
       return null;
     }
-
     setUser(data.user ?? null);
     return data.user ?? null;
   };
 
+  // ======================
+  // EMAIL AUTH
+  // ======================
   const loginWithEmail = async (
     email: string,
     password: string
   ): Promise<User | null> => {
-    const cleanEmail = (email ?? '').trim();
-
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: cleanEmail,
+      email: email.trim(),
       password,
     });
 
     if (error) {
-      // ⚠️ Это и есть твой лог "Invalid login credentials"
-      console.warn('loginWithEmail error', {
-        message: error.message,
-        status: (error as any)?.status,
-        name: (error as any)?.name,
-        email: cleanEmail,
-      });
+      console.warn('loginWithEmail error', error.message);
       return null;
     }
 
@@ -151,45 +130,78 @@ export function AuthProvider({ children }: AuthProviderProps) {
     password: string
   ): Promise<User | null> => {
     const { data, error } = await supabase.auth.signUp({
-      email: (email ?? '').trim(),
+      email: email.trim(),
       password,
       options: {
         data: { full_name: fullName },
-
-        // ✅ письмо после подтверждения редиректит на /confirmed
         emailRedirectTo: 'https://holdyou.app/confirmed?source=email',
       },
     });
 
-    if (error) {
-      console.warn('registerWithEmail error', error);
-      throw error;
-    }
+    if (error) throw error;
 
     setUser(data.user ?? null);
     return data.user ?? null;
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    const redirectTo = 'https://holdyou.app/auth/reset-password';
-
-    const { error } = await supabase.auth.resetPasswordForEmail((email ?? '').trim(), {
-      redirectTo,
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: 'https://holdyou.app/auth/reset-password',
     });
 
-    if (error) {
-      console.warn('sendPasswordReset error', error);
-      throw error;
-    }
+    if (error) throw error;
   };
 
   const logout = async (): Promise<void> => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.warn('logout error', error);
-      throw error;
-    }
+    await supabase.auth.signOut();
     setUser(null);
+  };
+
+  // ======================
+  // OAUTH (APPLE / GOOGLE)
+  // ======================
+  const oauthRedirectUrl = Linking.createURL('/');
+
+  const signInWithApple = async () => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'apple',
+      options: {
+        redirectTo: oauthRedirectUrl,
+      },
+    });
+
+    if (error) {
+      console.warn('Apple OAuth error', error);
+      return;
+    }
+
+    if (data?.url) {
+      await WebBrowser.openAuthSessionAsync(
+        data.url,
+        oauthRedirectUrl
+      );
+    }
+  };
+
+  const signInWithGoogle = async () => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: oauthRedirectUrl,
+      },
+    });
+
+    if (error) {
+      console.warn('Google OAuth error', error);
+      return;
+    }
+
+    if (data?.url) {
+      await WebBrowser.openAuthSessionAsync(
+        data.url,
+        oauthRedirectUrl
+      );
+    }
   };
 
   const isEmailConfirmed = calcIsEmailConfirmed(user);
@@ -205,6 +217,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       sendPasswordReset,
       logout,
       refreshUser,
+      signInWithApple,
+      signInWithGoogle,
     }),
     [user, authLoading, isEmailConfirmed]
   );
@@ -214,6 +228,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
