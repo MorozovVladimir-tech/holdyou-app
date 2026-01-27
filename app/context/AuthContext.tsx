@@ -41,7 +41,7 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   refreshUser: () => Promise<User | null>;
 
-  // ✅ OAuth
+  // OAuth
   signInWithApple: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
 }
@@ -55,6 +55,10 @@ type AuthProviderProps = {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+  // ✅ Диплинк для возврата из OAuth в приложение
+  // На iOS/Android будет типа: holdyou://auth/callback
+  const oauthRedirectUrl = useMemo(() => Linking.createURL('auth/callback'), []);
 
   // ======================
   // INIT SESSION
@@ -88,6 +92,40 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isMounted = false;
       subscription.unsubscribe();
     };
+  }, []);
+
+  // ======================
+  // OAUTH CALLBACK HANDLER (важно)
+  // ======================
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', async ({ url }) => {
+      try {
+        const parsed = Linking.parse(url);
+        const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
+
+        // ловим наш callback: holdyou://auth/callback?code=...
+        if (path.startsWith('auth/callback')) {
+          const { error } = await supabase.auth.exchangeCodeForSession(url);
+          if (error) {
+            console.warn('exchangeCodeForSession error', error);
+            return;
+          }
+
+          // обновим user
+          const { data, error: userErr } = await supabase.auth.getUser();
+          if (userErr) {
+            console.warn('getUser after oauth error', userErr);
+            return;
+          }
+
+          setUser(data.user ?? null);
+        }
+      } catch (e) {
+        console.warn('oauth url handler error', e);
+      }
+    });
+
+    return () => sub.remove();
   }, []);
 
   // ======================
@@ -160,8 +198,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   // OAUTH (APPLE / GOOGLE)
   // ======================
-  const oauthRedirectUrl = Linking.createURL('/');
-
   const signInWithApple = async () => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'apple',
@@ -172,14 +208,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (error) {
       console.warn('Apple OAuth error', error);
-      return;
+      throw error;
     }
 
     if (data?.url) {
-      await WebBrowser.openAuthSessionAsync(
-        data.url,
-        oauthRedirectUrl
-      );
+      await WebBrowser.openAuthSessionAsync(data.url, oauthRedirectUrl);
     }
   };
 
@@ -193,14 +226,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (error) {
       console.warn('Google OAuth error', error);
-      return;
+      throw error;
     }
 
     if (data?.url) {
-      await WebBrowser.openAuthSessionAsync(
-        data.url,
-        oauthRedirectUrl
-      );
+      await WebBrowser.openAuthSessionAsync(data.url, oauthRedirectUrl);
     }
   };
 
@@ -220,7 +250,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       signInWithApple,
       signInWithGoogle,
     }),
-    [user, authLoading, isEmailConfirmed]
+    [user, authLoading, isEmailConfirmed, oauthRedirectUrl]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
