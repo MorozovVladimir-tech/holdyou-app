@@ -7,8 +7,8 @@ import React, {
   useState,
 } from 'react';
 import type { User } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
 import { supabase } from '../lib/supabaseClient';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -41,7 +41,6 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   refreshUser: () => Promise<User | null>;
 
-  // OAuth
   signInWithApple: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
 }
@@ -56,13 +55,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // ✅ Redirect URI строго в scheme (не в https://holdyou.app)
+  // ВАЖНО: форсим именно custom scheme, чтобы не улетать в https://holdyou.app
   const oauthRedirectUrl = useMemo(
-    () =>
-      AuthSession.makeRedirectUri({
-        scheme: 'holdyou',
-        path: 'auth/callback',
-      }),
+    () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
     []
   );
 
@@ -170,59 +165,46 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   // OAUTH (APPLE / GOOGLE)
   // ======================
-  const openAndExchange = async (providerUrl: string) => {
+  const completeOAuth = async (provider: 'apple' | 'google') => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: oauthRedirectUrl,
+      },
+    });
+
+    if (error) {
+      console.warn(`${provider} OAuth error`, error);
+      throw error;
+    }
+
+    if (!data?.url) return;
+
+    // Открываем браузер-сессию и ждём возврат
     const result = await WebBrowser.openAuthSessionAsync(
-      providerUrl,
+      data.url,
       oauthRedirectUrl
     );
 
-    if (result.type === 'success' && result.url) {
-      const { error } = await supabase.auth.exchangeCodeForSession(result.url);
-      if (error) {
-        console.warn('exchangeCodeForSession error', error);
-        throw error;
-      }
-
-      // Обновим user локально (на всякий)
-      await refreshUser();
+    if (result.type !== 'success' || !result.url) {
+      // cancel / dismiss
+      return;
     }
+
+    // Меняем code->session прямо из url, который вернулся
+    const { error: exErr } = await supabase.auth.exchangeCodeForSession(
+      result.url
+    );
+    if (exErr) {
+      console.warn('exchangeCodeForSession error', exErr);
+      throw exErr;
+    }
+
+    await refreshUser();
   };
 
-  const signInWithApple = async () => {
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'apple',
-      options: {
-        redirectTo: oauthRedirectUrl,
-      },
-    });
-
-    if (error) {
-      console.warn('Apple OAuth error', error);
-      throw error;
-    }
-
-    if (data?.url) {
-      await openAndExchange(data.url);
-    }
-  };
-
-  const signInWithGoogle = async () => {
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: oauthRedirectUrl,
-      },
-    });
-
-    if (error) {
-      console.warn('Google OAuth error', error);
-      throw error;
-    }
-
-    if (data?.url) {
-      await openAndExchange(data.url);
-    }
-  };
+  const signInWithApple = async () => completeOAuth('apple');
+  const signInWithGoogle = async () => completeOAuth('google');
 
   const isEmailConfirmed = calcIsEmailConfirmed(user);
 
