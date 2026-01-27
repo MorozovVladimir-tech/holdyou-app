@@ -55,9 +55,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // ВАЖНО: форсим именно custom scheme, чтобы не улетать в https://holdyou.app
+  // ✅ Redirect back to app via custom scheme (holdyou://)
+  // IMPORTANT: no manual exchangeCodeForSession, Supabase handles PKCE internally.
   const oauthRedirectUrl = useMemo(
-    () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
+    () => Linking.createURL('/', { scheme: 'holdyou' }),
     []
   );
 
@@ -170,6 +171,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       provider,
       options: {
         redirectTo: oauthRedirectUrl,
+        // Optional: keeps the browser session more stable on iOS
+        skipBrowserRedirect: true,
       },
     });
 
@@ -180,26 +183,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (!data?.url) return;
 
-    // Открываем браузер-сессию и ждём возврат
     const result = await WebBrowser.openAuthSessionAsync(
       data.url,
       oauthRedirectUrl
     );
 
-    if (result.type !== 'success' || !result.url) {
-      // cancel / dismiss
-      return;
-    }
+    // success/cancel/dismiss — on success Supabase should complete internally
+    if (result.type !== 'success') return;
 
-    // Меняем code->session прямо из url, который вернулся
-    const { error: exErr } = await supabase.auth.exchangeCodeForSession(
-      result.url
-    );
-    if (exErr) {
-      console.warn('exchangeCodeForSession error', exErr);
-      throw exErr;
-    }
-
+    // Give Supabase a moment to persist session; then sync state
     await refreshUser();
   };
 
