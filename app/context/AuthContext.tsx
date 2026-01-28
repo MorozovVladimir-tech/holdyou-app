@@ -45,7 +45,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // ВАЖНО: фиксируем кастом-схему, чтобы редирект был holdyou://...
+  // callback: holdyou://auth/callback
   const oauthRedirectUrl = useMemo(
     () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
     []
@@ -99,10 +99,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   const handleOAuthUrl = async (url: string) => {
     const parsed = Linking.parse(url);
+
+    // ВАЖНО:
+    // holdyou://auth/callback?... => hostname="auth", path="callback"
+    const host = (parsed.hostname || '').toLowerCase();
     const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
 
-    // Ловим holdyou://auth/callback?code=...
-    if (!path.startsWith('auth/callback')) return;
+    const isOurCallback =
+      (host === 'auth' && path.startsWith('callback')) || path.startsWith('auth/callback');
+
+    if (!isOurCallback) return;
 
     console.log('[OAuth] callback url:', url);
 
@@ -112,7 +118,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       throw exErr;
     }
 
-    // КЛЮЧЕВО: берём user из session (а не getUser сразу)
     const { data: { session }, error: sErr } = await supabase.auth.getSession();
     if (sErr) {
       console.warn('[OAuth] getSession after exchange error', sErr);
@@ -131,9 +136,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
-        if (initialUrl) {
-          await handleOAuthUrl(initialUrl);
-        }
+        if (initialUrl) await handleOAuthUrl(initialUrl);
       } catch (e) {
         console.warn('[OAuth] getInitialURL/handle error', e);
       }
@@ -222,11 +225,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     console.log('[OAuth] redirectTo:', oauthRedirectUrl);
 
     const result = await WebBrowser.openAuthSessionAsync(data.url, oauthRedirectUrl);
-
     console.log('[OAuth] browser result:', result);
 
     if (result.type === 'success' && result.url) {
-      // обработаем сразу (и Linking event тоже может прилететь — но handleOAuthUrl безопасен)
       await handleOAuthUrl(result.url);
     }
   };
