@@ -5,7 +5,8 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabaseClient';
 
-WebBrowser.maybeCompleteAuthSession();
+// НЕ НУЖНО для нашего флоу, может мешать/путать стейт.
+// WebBrowser.maybeCompleteAuthSession();
 
 function calcIsEmailConfirmed(u: User | null): boolean {
   if (!u) return false;
@@ -45,11 +46,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // callback: holdyou://auth/callback
-  const oauthRedirectUrl = useMemo(
+  // ✅ returnUrl: куда браузер “закрывается” обратно (в приложение)
+  const appReturnUrl = useMemo(
     () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
     []
   );
+
+  // ✅ redirectTo: куда Supabase будет редиректить в конце OAuth
+  // ВАЖНО: делаем HTTPS страницу-ретранслятор, чтобы сохранить state
+  const webRelayRedirectUrl = 'https://holdyou.app/auth/callback';
 
   // ======================
   // INIT SESSION
@@ -84,75 +89,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // HELPERS
   // ======================
   const refreshUser = async (): Promise<User | null> => {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const { data, error } = await supabase.auth.getUser();
     if (error) {
       console.warn('refreshUser error', error);
       return null;
     }
-    const u = session?.user ?? null;
-    setUser(u);
-    return u;
+    setUser(data.user ?? null);
+    return data.user ?? null;
   };
-
-  // ======================
-  // OAUTH CALLBACK HANDLER
-  // ======================
-  const handleOAuthUrl = async (url: string) => {
-    const parsed = Linking.parse(url);
-
-    // ВАЖНО:
-    // holdyou://auth/callback?... => hostname="auth", path="callback"
-    const host = (parsed.hostname || '').toLowerCase();
-    const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
-
-    const isOurCallback =
-      (host === 'auth' && path.startsWith('callback')) || path.startsWith('auth/callback');
-
-    if (!isOurCallback) return;
-
-    console.log('[OAuth] callback url:', url);
-
-    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
-    if (exErr) {
-      console.warn('[OAuth] exchangeCodeForSession error', exErr);
-      throw exErr;
-    }
-
-    const { data: { session }, error: sErr } = await supabase.auth.getSession();
-    if (sErr) {
-      console.warn('[OAuth] getSession after exchange error', sErr);
-      throw sErr;
-    }
-
-    if (!session?.user) {
-      throw new Error('[OAuth] Session missing after exchangeCodeForSession');
-    }
-
-    setUser(session.user);
-  };
-
-  useEffect(() => {
-    // 1) cold start
-    (async () => {
-      try {
-        const initialUrl = await Linking.getInitialURL();
-        if (initialUrl) await handleOAuthUrl(initialUrl);
-      } catch (e) {
-        console.warn('[OAuth] getInitialURL/handle error', e);
-      }
-    })();
-
-    // 2) runtime events
-    const sub = Linking.addEventListener('url', async ({ url }) => {
-      try {
-        await handleOAuthUrl(url);
-      } catch (e) {
-        console.warn('[OAuth] url event handle error', e);
-      }
-    });
-
-    return () => sub.remove();
-  }, []);
 
   // ======================
   // EMAIL AUTH
@@ -206,27 +150,64 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   // ======================
+  // OAUTH URL HANDLER
+  // ======================
+  const handleOAuthUrl = async (url: string) => {
+    // ожидаем holdyou://auth/callback?code=...&state=...
+    const parsed = Linking.parse(url);
+    const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
+    if (!path.startsWith('auth/callback')) return;
+
+    console.log('[OAuth] callback url:', url);
+
+    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+    if (exErr) {
+      console.warn('[OAuth] exchangeCodeForSession error', exErr);
+      throw exErr;
+    }
+
+    await refreshUser();
+  };
+
+  useEffect(() => {
+    // runtime events (когда сайт перекинет в holdyou://...)
+    const sub = Linking.addEventListener('url', async ({ url }) => {
+      try {
+        await handleOAuthUrl(url);
+      } catch (e) {
+        console.warn('[OAuth] handle url event error', e);
+      }
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  // ======================
   // OAUTH (APPLE / GOOGLE)
   // ======================
   const completeOAuth = async (provider: 'apple' | 'google') => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: oauthRedirectUrl },
+      options: {
+        // ⚠️ ВАЖНО: сюда ставим HTTPS relay страницу
+        redirectTo: webRelayRedirectUrl,
+      },
     });
 
     if (error) {
       console.warn(`${provider} OAuth error`, error);
       throw error;
     }
-
     if (!data?.url) return;
 
     console.log('[OAuth] auth url:', data.url);
-    console.log('[OAuth] redirectTo:', oauthRedirectUrl);
+    console.log('[OAuth] redirectTo(web):', webRelayRedirectUrl);
+    console.log('[OAuth] returnUrl(app):', appReturnUrl);
 
-    const result = await WebBrowser.openAuthSessionAsync(data.url, oauthRedirectUrl);
+    const result = await WebBrowser.openAuthSessionAsync(data.url, appReturnUrl);
     console.log('[OAuth] browser result:', result);
 
+    // Когда relay страница редиректнет в holdyou://..., iOS вернёт сюда success+url
     if (result.type === 'success' && result.url) {
       await handleOAuthUrl(result.url);
     }
