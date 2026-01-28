@@ -81,67 +81,75 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   // ======================
+  // HELPERS
+  // ======================
+  const refreshUser = async (): Promise<User | null> => {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.warn('refreshUser error', error);
+      return null;
+    }
+    const u = session?.user ?? null;
+    setUser(u);
+    return u;
+  };
+
+  // ======================
   // OAUTH CALLBACK HANDLER
-  // (на случай cold start и на случай event)
   // ======================
   const handleOAuthUrl = async (url: string) => {
-    try {
-      const parsed = Linking.parse(url);
-      const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
+    const parsed = Linking.parse(url);
+    const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
 
-      // Ловим holdyou://auth/callback?code=...
-      if (!path.startsWith('auth/callback')) return;
+    // Ловим holdyou://auth/callback?code=...
+    if (!path.startsWith('auth/callback')) return;
 
-      console.log('[OAuth] callback url:', url);
+    console.log('[OAuth] callback url:', url);
 
-      const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
-      if (exErr) {
-        console.warn('[OAuth] exchangeCodeForSession error', exErr);
-        throw exErr;
-      }
-
-      const { data, error: userErr } = await supabase.auth.getUser();
-      if (userErr) {
-        console.warn('[OAuth] getUser after exchange error', userErr);
-        throw userErr;
-      }
-
-      setUser(data.user ?? null);
-    } catch (e) {
-      console.warn('[OAuth] handleOAuthUrl error', e);
-      throw e;
+    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+    if (exErr) {
+      console.warn('[OAuth] exchangeCodeForSession error', exErr);
+      throw exErr;
     }
+
+    // КЛЮЧЕВО: берём user из session (а не getUser сразу)
+    const { data: { session }, error: sErr } = await supabase.auth.getSession();
+    if (sErr) {
+      console.warn('[OAuth] getSession after exchange error', sErr);
+      throw sErr;
+    }
+
+    if (!session?.user) {
+      throw new Error('[OAuth] Session missing after exchangeCodeForSession');
+    }
+
+    setUser(session.user);
   };
 
   useEffect(() => {
     // 1) cold start
     (async () => {
-      const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) {
-        await handleOAuthUrl(initialUrl);
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        if (initialUrl) {
+          await handleOAuthUrl(initialUrl);
+        }
+      } catch (e) {
+        console.warn('[OAuth] getInitialURL/handle error', e);
       }
     })();
 
     // 2) runtime events
     const sub = Linking.addEventListener('url', async ({ url }) => {
-      await handleOAuthUrl(url);
+      try {
+        await handleOAuthUrl(url);
+      } catch (e) {
+        console.warn('[OAuth] url event handle error', e);
+      }
     });
 
     return () => sub.remove();
   }, []);
-
-  // ======================
-  // HELPERS
-  // ======================
-  const refreshUser = async (): Promise<User | null> => {
-    const { data, error } = await supabase.auth.getUser();
-    if (error) {
-      console.warn('refreshUser error', error);
-      return null;
-    }
-    setUser(data.user ?? null);
-    return data.user ?? null;
-  };
 
   // ======================
   // EMAIL AUTH
@@ -200,9 +208,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const completeOAuth = async (provider: 'apple' | 'google') => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: {
-        redirectTo: oauthRedirectUrl,
-      },
+      options: { redirectTo: oauthRedirectUrl },
     });
 
     if (error) {
@@ -212,7 +218,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (!data?.url) return;
 
-    // КЛЮЧЕВО: смотри тут redirect_to
     console.log('[OAuth] auth url:', data.url);
     console.log('[OAuth] redirectTo:', oauthRedirectUrl);
 
@@ -220,10 +225,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     console.log('[OAuth] browser result:', result);
 
-    // Если iOS вернул success + url — обработаем сразу
     if (result.type === 'success' && result.url) {
+      // обработаем сразу (и Linking event тоже может прилететь — но handleOAuthUrl безопасен)
       await handleOAuthUrl(result.url);
-      await refreshUser();
     }
   };
 
