@@ -1,5 +1,12 @@
 // app/context/AuthContext.tsx
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -26,7 +33,11 @@ interface AuthContextValue {
   isEmailConfirmed: boolean;
 
   loginWithEmail: (email: string, password: string) => Promise<User | null>;
-  registerWithEmail: (fullName: string, email: string, password: string) => Promise<User | null>;
+  registerWithEmail: (
+    fullName: string,
+    email: string,
+    password: string
+  ) => Promise<User | null>;
   sendPasswordReset: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<User | null>;
@@ -51,6 +62,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     []
   );
 
+  // ✅ защита от двойной обработки callback (cold start + event / двойной редирект)
+  const isExchangingRef = useRef(false);
+
   // ======================
   // INIT SESSION
   // ======================
@@ -59,7 +73,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     (async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
         if (!isMounted) return;
         setUser(session?.user ?? null);
       } catch (e) {
@@ -69,7 +86,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     })();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!isMounted) return;
       setUser(session?.user ?? null);
     });
@@ -97,54 +116,97 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // OAUTH CALLBACK HANDLER
   // ======================
   const handleOAuthUrl = async (url: string) => {
+    if (!url) return;
+
+    // ВАЖНО: отсекаем всё, что не наш callback
+    // holdyou://auth/callback?code=...
     const parsed = Linking.parse(url);
 
-    // ВАЖНО:
-    // holdyou://auth/callback?code=...
-    // parsed.hostname === "auth"
-    // parsed.path === "callback"
     const fullPath = [parsed.hostname, parsed.path]
       .filter(Boolean)
       .join('/')
-      .replace(/^\/+/, '')
+      .replace(/^\/+/, '') // убираем ведущие слэши
       .toLowerCase();
 
     if (!fullPath.startsWith('auth/callback')) return;
 
-    console.log('[OAuth] callback url:', url);
-    console.log('[OAuth] parsed:', { hostname: parsed.hostname, path: parsed.path, fullPath });
-
-    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
-    if (exErr) {
-      console.warn('[OAuth] exchangeCodeForSession error', exErr);
-      throw exErr;
+    // защита от дублей
+    if (isExchangingRef.current) {
+      console.log('[OAuth] skip duplicate callback while exchanging');
+      return;
     }
 
-    await refreshUser();
-    console.log('[OAuth] session exchanged + user refreshed');
+    isExchangingRef.current = true;
+
+    try {
+      console.log('[OAuth] callback url:', url);
+      console.log('[OAuth] parsed:', {
+        hostname: parsed.hostname,
+        path: parsed.path,
+        fullPath,
+        queryParams: parsed.queryParams,
+      });
+
+      // Если прилетел пустой callback без code — нет смысла продолжать
+      const code =
+        (parsed.queryParams?.code as string | undefined) ??
+        (parsed.queryParams?.authorization_code as string | undefined);
+      if (!code) {
+        console.warn('[OAuth] callback without code, skip');
+        return;
+      }
+
+      const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+      if (exErr) {
+        console.warn('[OAuth] exchangeCodeForSession error', exErr);
+        throw exErr;
+      }
+
+      await refreshUser();
+      console.log('[OAuth] session exchanged + user refreshed');
+    } finally {
+      isExchangingRef.current = false;
+    }
   };
 
   useEffect(() => {
+    let cancelled = false;
+
     // cold start
     (async () => {
-      const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) {
-        await handleOAuthUrl(initialUrl);
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        if (cancelled) return;
+        if (initialUrl) {
+          await handleOAuthUrl(initialUrl);
+        }
+      } catch (e) {
+        console.warn('[OAuth] getInitialURL/handle error', e);
       }
     })();
 
     // runtime events
     const sub = Linking.addEventListener('url', async ({ url }) => {
-      await handleOAuthUrl(url);
+      try {
+        await handleOAuthUrl(url);
+      } catch (e) {
+        console.warn('[OAuth] event handle error', e);
+      }
     });
 
-    return () => sub.remove();
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, []);
 
   // ======================
   // EMAIL AUTH
   // ======================
-  const loginWithEmail = async (email: string, password: string): Promise<User | null> => {
+  const loginWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<User | null> => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -199,8 +261,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // В Supabase redirect_to будет на https://holdyou.app/auth/callback (через твой Vercel-bridge),
-        // а RETURN URL для приложения — appReturnUrl.
+        // web-bridge на Vercel: https://holdyou.app/auth/callback -> holdyou://auth/callback?...(все параметры)
         redirectTo: 'https://holdyou.app/auth/callback',
       },
     });
@@ -219,6 +280,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     console.log('[OAuth] browser result:', result);
 
+    // На iOS обычно сюда прилетает уже deep link holdyou://auth/callback?...
     if (result.type === 'success' && result.url) {
       await handleOAuthUrl(result.url);
     }
