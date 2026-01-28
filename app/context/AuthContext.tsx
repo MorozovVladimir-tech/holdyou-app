@@ -1,11 +1,5 @@
 // app/context/AuthContext.tsx
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -32,11 +26,7 @@ interface AuthContextValue {
   isEmailConfirmed: boolean;
 
   loginWithEmail: (email: string, password: string) => Promise<User | null>;
-  registerWithEmail: (
-    fullName: string,
-    email: string,
-    password: string
-  ) => Promise<User | null>;
+  registerWithEmail: (fullName: string, email: string, password: string) => Promise<User | null>;
   sendPasswordReset: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<User | null>;
@@ -55,10 +45,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // ✅ Redirect back to app via custom scheme (holdyou://)
-  // IMPORTANT: no manual exchangeCodeForSession, Supabase handles PKCE internally.
+  // ВАЖНО: фиксируем кастом-схему, чтобы редирект был holdyou://...
   const oauthRedirectUrl = useMemo(
-    () => Linking.createURL('/', { scheme: 'holdyou' }),
+    () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
     []
   );
 
@@ -70,10 +59,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     (async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
+        const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
         setUser(session?.user ?? null);
       } catch (e) {
@@ -83,9 +69,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     })();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!isMounted) return;
       setUser(session?.user ?? null);
     });
@@ -94,6 +78,56 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isMounted = false;
       subscription.unsubscribe();
     };
+  }, []);
+
+  // ======================
+  // OAUTH CALLBACK HANDLER
+  // (на случай cold start и на случай event)
+  // ======================
+  const handleOAuthUrl = async (url: string) => {
+    try {
+      const parsed = Linking.parse(url);
+      const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
+
+      // Ловим holdyou://auth/callback?code=...
+      if (!path.startsWith('auth/callback')) return;
+
+      console.log('[OAuth] callback url:', url);
+
+      const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+      if (exErr) {
+        console.warn('[OAuth] exchangeCodeForSession error', exErr);
+        throw exErr;
+      }
+
+      const { data, error: userErr } = await supabase.auth.getUser();
+      if (userErr) {
+        console.warn('[OAuth] getUser after exchange error', userErr);
+        throw userErr;
+      }
+
+      setUser(data.user ?? null);
+    } catch (e) {
+      console.warn('[OAuth] handleOAuthUrl error', e);
+      throw e;
+    }
+  };
+
+  useEffect(() => {
+    // 1) cold start
+    (async () => {
+      const initialUrl = await Linking.getInitialURL();
+      if (initialUrl) {
+        await handleOAuthUrl(initialUrl);
+      }
+    })();
+
+    // 2) runtime events
+    const sub = Linking.addEventListener('url', async ({ url }) => {
+      await handleOAuthUrl(url);
+    });
+
+    return () => sub.remove();
   }, []);
 
   // ======================
@@ -112,10 +146,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   // EMAIL AUTH
   // ======================
-  const loginWithEmail = async (
-    email: string,
-    password: string
-  ): Promise<User | null> => {
+  const loginWithEmail = async (email: string, password: string): Promise<User | null> => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -171,8 +202,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       provider,
       options: {
         redirectTo: oauthRedirectUrl,
-        // Optional: keeps the browser session more stable on iOS
-        skipBrowserRedirect: true,
       },
     });
 
@@ -183,16 +212,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (!data?.url) return;
 
-    const result = await WebBrowser.openAuthSessionAsync(
-      data.url,
-      oauthRedirectUrl
-    );
+    // КЛЮЧЕВО: смотри тут redirect_to
+    console.log('[OAuth] auth url:', data.url);
+    console.log('[OAuth] redirectTo:', oauthRedirectUrl);
 
-    // success/cancel/dismiss — on success Supabase should complete internally
-    if (result.type !== 'success') return;
+    const result = await WebBrowser.openAuthSessionAsync(data.url, oauthRedirectUrl);
 
-    // Give Supabase a moment to persist session; then sync state
-    await refreshUser();
+    console.log('[OAuth] browser result:', result);
+
+    // Если iOS вернул success + url — обработаем сразу
+    if (result.type === 'success' && result.url) {
+      await handleOAuthUrl(result.url);
+      await refreshUser();
+    }
   };
 
   const signInWithApple = async () => completeOAuth('apple');
