@@ -5,8 +5,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabaseClient';
 
-// НЕ НУЖНО для нашего флоу, может мешать/путать стейт.
-// WebBrowser.maybeCompleteAuthSession();
+WebBrowser.maybeCompleteAuthSession();
 
 function calcIsEmailConfirmed(u: User | null): boolean {
   if (!u) return false;
@@ -46,15 +45,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
-  // ✅ returnUrl: куда браузер “закрывается” обратно (в приложение)
+  // Возврат в приложение (custom scheme)
   const appReturnUrl = useMemo(
     () => Linking.createURL('auth/callback', { scheme: 'holdyou' }),
     []
   );
-
-  // ✅ redirectTo: куда Supabase будет редиректить в конце OAuth
-  // ВАЖНО: делаем HTTPS страницу-ретранслятор, чтобы сохранить state
-  const webRelayRedirectUrl = 'https://holdyou.app/auth/callback';
 
   // ======================
   // INIT SESSION
@@ -97,6 +92,54 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(data.user ?? null);
     return data.user ?? null;
   };
+
+  // ======================
+  // OAUTH CALLBACK HANDLER
+  // ======================
+  const handleOAuthUrl = async (url: string) => {
+    const parsed = Linking.parse(url);
+
+    // ВАЖНО:
+    // holdyou://auth/callback?code=...
+    // parsed.hostname === "auth"
+    // parsed.path === "callback"
+    const fullPath = [parsed.hostname, parsed.path]
+      .filter(Boolean)
+      .join('/')
+      .replace(/^\/+/, '')
+      .toLowerCase();
+
+    if (!fullPath.startsWith('auth/callback')) return;
+
+    console.log('[OAuth] callback url:', url);
+    console.log('[OAuth] parsed:', { hostname: parsed.hostname, path: parsed.path, fullPath });
+
+    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+    if (exErr) {
+      console.warn('[OAuth] exchangeCodeForSession error', exErr);
+      throw exErr;
+    }
+
+    await refreshUser();
+    console.log('[OAuth] session exchanged + user refreshed');
+  };
+
+  useEffect(() => {
+    // cold start
+    (async () => {
+      const initialUrl = await Linking.getInitialURL();
+      if (initialUrl) {
+        await handleOAuthUrl(initialUrl);
+      }
+    })();
+
+    // runtime events
+    const sub = Linking.addEventListener('url', async ({ url }) => {
+      await handleOAuthUrl(url);
+    });
+
+    return () => sub.remove();
+  }, []);
 
   // ======================
   // EMAIL AUTH
@@ -150,46 +193,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   // ======================
-  // OAUTH URL HANDLER
-  // ======================
-  const handleOAuthUrl = async (url: string) => {
-    // ожидаем holdyou://auth/callback?code=...&state=...
-    const parsed = Linking.parse(url);
-    const path = (parsed.path || '').replace(/^\/+/, '').toLowerCase();
-    if (!path.startsWith('auth/callback')) return;
-
-    console.log('[OAuth] callback url:', url);
-
-    const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
-    if (exErr) {
-      console.warn('[OAuth] exchangeCodeForSession error', exErr);
-      throw exErr;
-    }
-
-    await refreshUser();
-  };
-
-  useEffect(() => {
-    // runtime events (когда сайт перекинет в holdyou://...)
-    const sub = Linking.addEventListener('url', async ({ url }) => {
-      try {
-        await handleOAuthUrl(url);
-      } catch (e) {
-        console.warn('[OAuth] handle url event error', e);
-      }
-    });
-
-    return () => sub.remove();
-  }, []);
-
-  // ======================
   // OAUTH (APPLE / GOOGLE)
   // ======================
   const completeOAuth = async (provider: 'apple' | 'google') => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // ⚠️ ВАЖНО: сюда ставим HTTPS relay страницу
+        // В Supabase redirect_to будет на https://holdyou.app/auth/callback (через твой Vercel-bridge),
+        // а RETURN URL для приложения — appReturnUrl.
         redirectTo: 'https://holdyou.app/auth/callback',
       },
     });
@@ -198,16 +209,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       console.warn(`${provider} OAuth error`, error);
       throw error;
     }
+
     if (!data?.url) return;
 
     console.log('[OAuth] auth url:', data.url);
-    console.log('[OAuth] redirectTo(web):', 'https://holdyou.app/auth/callback');
     console.log('[OAuth] returnUrl(app):', appReturnUrl);
 
     const result = await WebBrowser.openAuthSessionAsync(data.url, appReturnUrl);
+
     console.log('[OAuth] browser result:', result);
 
-    // Когда relay страница редиректнет в holdyou://..., iOS вернёт сюда success+url
     if (result.type === 'success' && result.url) {
       await handleOAuthUrl(result.url);
     }
