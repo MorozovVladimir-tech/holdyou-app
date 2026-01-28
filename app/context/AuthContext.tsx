@@ -190,7 +190,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       provider,
       options: {
         // ⚠️ ВАЖНО: сюда ставим HTTPS relay страницу
-        redirectTo: webRelayRedirectUrl,
+        redirectTo: 'https://holdyou.app/auth/callback',
       },
     });
 
@@ -201,7 +201,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!data?.url) return;
 
     console.log('[OAuth] auth url:', data.url);
-    console.log('[OAuth] redirectTo(web):', webRelayRedirectUrl);
+    console.log('[OAuth] redirectTo(web):', 'https://holdyou.app/auth/callback');
     console.log('[OAuth] returnUrl(app):', appReturnUrl);
 
     const result = await WebBrowser.openAuthSessionAsync(data.url, appReturnUrl);
