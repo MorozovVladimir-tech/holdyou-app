@@ -261,8 +261,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // web-bridge на Vercel: https://holdyou.app/auth/callback -> holdyou://auth/callback?...(все параметры)
-        redirectTo: 'https://holdyou.app/auth/callback',
+        // Редирект сразу в приложение. Supabase при редиректе на https:// не отдаёт state;
+        // при редиректе на custom scheme может отдавать code + state — проверяем.
+        redirectTo: 'holdyou://auth/callback',
       },
     });
 
