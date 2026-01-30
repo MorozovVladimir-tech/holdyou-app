@@ -8,11 +8,15 @@ import React, {
   useState,
 } from 'react';
 import type { User } from '@supabase/supabase-js';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
+
+// Web Client ID из Google Cloud Console (OAuth 2.0 Client ID типа "Web application"). Нужен для нативного входа и id_token.
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -66,6 +70,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // ✅ защита от двойной обработки callback (cold start + event / двойной редирект)
   const isExchangingRef = useRef(false);
+
+  // ======================
+  // GOOGLE NATIVE CONFIG
+  // ======================
+  useEffect(() => {
+    if (
+      (Platform.OS === 'ios' || Platform.OS === 'android') &&
+      GOOGLE_WEB_CLIENT_ID.length > 0
+    ) {
+      GoogleSignin.configure({
+        webClientId: GOOGLE_WEB_CLIENT_ID,
+      });
+    }
+  }, []);
 
   // ======================
   // INIT SESSION
@@ -317,7 +335,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await completeOAuth('apple');
     }
   };
-  const signInWithGoogle = async () => completeOAuth('google');
+  const signInWithGoogle = async () => {
+    const useNative =
+      (Platform.OS === 'ios' || Platform.OS === 'android') &&
+      GOOGLE_WEB_CLIENT_ID.length > 0;
+    if (useNative) {
+      try {
+        if (Platform.OS === 'android') {
+          await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+        }
+        const response = await GoogleSignin.signIn();
+        if (response.type === 'cancelled') return;
+        if (response.type !== 'success' || !response.data?.idToken) {
+          throw new Error('Google Sign-In failed: no id token');
+        }
+        const { data, error } = await supabase.auth.signInWithIdToken({
+          provider: 'google',
+          token: response.data.idToken,
+        });
+        if (error) throw error;
+        setUser(data.user ?? null);
+      } catch (e) {
+        console.warn('google sign-in error', e);
+        throw e;
+      }
+    } else {
+      await completeOAuth('google');
+    }
+  };
 
   const isEmailConfirmed = calcIsEmailConfirmed(user);
 
