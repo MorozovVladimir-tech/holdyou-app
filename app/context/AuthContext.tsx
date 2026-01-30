@@ -8,8 +8,10 @@ import React, {
   useState,
 } from 'react';
 import type { User } from '@supabase/supabase-js';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -261,9 +263,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // Редирект сразу в приложение. Supabase при редиректе на https:// не отдаёт state;
-        // при редиректе на custom scheme может отдавать code + state — проверяем.
-        redirectTo: 'holdyou://auth/callback',
+        // Веб-мост. Supabase при редиректе на кастомный URL не отдаёт state (баг/ограничение).
+        redirectTo: 'https://holdyou.app/auth/callback',
       },
     });
 
@@ -287,7 +288,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const signInWithApple = async () => completeOAuth('apple');
+  const signInWithApple = async () => {
+    if (Platform.OS === 'ios' && (await AppleAuthentication.isAvailableAsync())) {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) {
+        throw new Error('Apple Sign-In failed: no identity token');
+      }
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+      });
+      if (error) throw error;
+      setUser(data.user ?? null);
+      const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (fullName && data.user) {
+        await supabase.auth.updateUser({ data: { full_name: fullName } });
+        await refreshUser();
+      }
+    } else {
+      await completeOAuth('apple');
+    }
+  };
   const signInWithGoogle = async () => completeOAuth('google');
 
   const isEmailConfirmed = calcIsEmailConfirmed(user);

@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.takeda1101.holdyou",
       "associatedDomains": ["applinks:holdyou.app"],
       "infoPlist": {
@@ -18,6 +19,12 @@
           {
             "CFBundleURLName": "holdyou",
             "CFBundleURLSchemes": ["holdyou"]
+          },
+          {
+            "CFBundleURLName": "google",
+            "CFBundleURLSchemes": [
+              "com.googleusercontent.apps.777661996824-2mo8kuk278gbqtkp2mkfvm3hlpqlv3sn"
+            ]
           }
         ]
       }
