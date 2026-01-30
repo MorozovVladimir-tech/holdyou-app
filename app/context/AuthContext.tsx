@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import type { User } from '@supabase/supabase-js';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
@@ -321,7 +322,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
   const signInWithGoogle = async () => {
+    const isExpoGo = Constants.appOwnership === 'expo';
     const useNative =
+      !isExpoGo &&
       (Platform.OS === 'ios' || Platform.OS === 'android') &&
       GOOGLE_WEB_CLIENT_ID.length > 0;
     if (!useNative) {
@@ -329,7 +332,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       return;
     }
     try {
-      const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+      const mod = require('@react-native-google-signin/google-signin');
+      const GoogleSignin = mod?.GoogleSignin ?? mod?.default;
+      if (!GoogleSignin) {
+        await completeOAuth('google');
+        return;
+      }
       GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID });
       if (Platform.OS === 'android') {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
