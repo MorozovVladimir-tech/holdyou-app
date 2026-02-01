@@ -15,8 +15,10 @@ import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 
-// Web Client ID из Google Cloud Console (OAuth 2.0 Client ID типа "Web application"). Нужен для нативного входа и id_token.
+// Web Client ID — OAuth 2.0 Client ID типа "Web application". Нужен для id_token.
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+// iOS Client ID — OAuth 2.0 Client ID типа "iOS". Нужен для нативного Sign In на iOS.
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -326,7 +328,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const useNative =
       !isExpoGo &&
       (Platform.OS === 'ios' || Platform.OS === 'android') &&
-      GOOGLE_WEB_CLIENT_ID.length > 0;
+      GOOGLE_WEB_CLIENT_ID.length > 0 &&
+      (Platform.OS !== 'ios' || GOOGLE_IOS_CLIENT_ID.length > 0);
     if (!useNative) {
       await completeOAuth('google');
       return;
@@ -338,7 +341,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
         await completeOAuth('google');
         return;
       }
-      GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID });
+      GoogleSignin.configure({
+        webClientId: GOOGLE_WEB_CLIENT_ID,
+        ...(Platform.OS === 'ios' &&
+          GOOGLE_IOS_CLIENT_ID.length > 0 && {
+            iosClientId: GOOGLE_IOS_CLIENT_ID,
+          }),
+      });
       if (Platform.OS === 'android') {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       }
