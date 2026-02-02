@@ -1,5 +1,5 @@
 // app/(tabs)/about.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -14,12 +14,10 @@ import { router } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabaseClient';
 
-import * as RNIap from 'react-native-iap';
-
 // ✅ правильный маршрут до экрана логина в папке onboarding
 const LOGIN_ROUTE = '/onboarding/Login' as const;
 
-// ✅ Product ID из App Store Connect
+// ✅ Product ID из App Store Connect (оставляем — пригодится при подключении IAP)
 const SUBSCRIPTION_PRODUCT_ID = 'holdyou_plus_monthly';
 
 // ✅ Триал (дни)
@@ -36,7 +34,12 @@ const formatDate = (value: string | null) => {
   });
 };
 
-type AccessState = 'loading' | 'trial_active' | 'trial_expired' | 'sub_active' | 'sub_inactive';
+type AccessState =
+  | 'loading'
+  | 'trial_active'
+  | 'trial_expired'
+  | 'sub_active'
+  | 'sub_inactive';
 
 export default function AboutScreen() {
   const { user, logout } = useAuth();
@@ -55,11 +58,9 @@ export default function AboutScreen() {
   const [isPrivacyVisible, setIsPrivacyVisible] = useState<boolean>(false);
   const [isTermsVisible, setIsTermsVisible] = useState<boolean>(false);
 
-  // IAP state
-  const [iapReady, setIapReady] = useState(false);
-  const [iapLoading, setIapLoading] = useState(false);
-  const purchaseUpdateSub = useRef<any>(null);
-  const purchaseErrorSub = useRef<any>(null);
+  // IAP state (пока не подключено — держим, чтобы UI не ломать)
+  const [iapReady] = useState<boolean>(false);
+  const [iapLoading, setIapLoading] = useState<boolean>(false);
 
   // ---------------------------
   // Notifications schedule
@@ -81,7 +82,7 @@ export default function AboutScreen() {
         if (error) throw error;
 
         if (data && data.length > 0) {
-          const times = data.map((row) => {
+          const times = data.map((row: { hour: number; minute: number; label?: string | null }) => {
             const period = row.hour >= 12 ? 'PM' : 'AM';
             let displayHour = row.hour % 12;
             if (displayHour === 0) displayHour = 12;
@@ -97,101 +98,6 @@ export default function AboutScreen() {
         setNextNotifications(null);
       }
     })();
-  }, [user?.id]);
-
-  // ---------------------------
-  // IAP init + listeners
-  // ---------------------------
-  useEffect(() => {
-    let isMounted = true;
-
-    async function initIap() {
-      try {
-        const connected = await RNIap.initConnection();
-        if (!connected) {
-          if (isMounted) setIapReady(false);
-          return;
-        }
-
-        // iOS only: clean pending state
-        try {
-          await RNIap.clearTransactionIOS();
-        } catch {}
-
-        // Preload product
-        try {
-          await RNIap.getSubscriptions({ skus: [SUBSCRIPTION_PRODUCT_ID] });
-        } catch {}
-
-        // Purchase listeners
-        purchaseUpdateSub.current = RNIap.purchaseUpdatedListener(async (purchase) => {
-          try {
-            if (!purchase?.productId) return;
-
-            // Finish transaction
-            try {
-              await RNIap.finishTransaction({ purchase, isConsumable: false });
-            } catch (e) {
-              console.warn('finishTransaction error', e);
-            }
-
-            // Update Supabase (MVP logic: mark active for 30 days)
-            if (purchase.productId === SUBSCRIPTION_PRODUCT_ID && user?.id) {
-              const now = new Date();
-              const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-              const { error } = await supabase
-                .from('sender_profiles')
-                .upsert(
-                  {
-                    user_id: user.id,
-                    subscription_status: 'active',
-                    subscription_expires_at: expires.toISOString(),
-                    // if trial exists — keep it, don’t overwrite
-                  },
-                  { onConflict: 'user_id' }
-                );
-
-              if (error) throw error;
-
-              setSubStatusRaw('active');
-              setSubExpiresAt(expires.toISOString());
-              setSubError(null);
-            }
-          } catch (e: any) {
-            console.warn('purchaseUpdatedListener error', e);
-            setSubError(e?.message ?? 'Purchase processed but failed to update access.');
-          } finally {
-            setIapLoading(false);
-          }
-        });
-
-        purchaseErrorSub.current = RNIap.purchaseErrorListener((error) => {
-          console.warn('purchaseErrorListener', error);
-          setIapLoading(false);
-          if (error?.code === 'E_USER_CANCELLED') return;
-          setSubError(error?.message ?? 'Purchase failed.');
-        });
-
-        if (isMounted) setIapReady(true);
-      } catch (e) {
-        console.warn('initIap error', e);
-        if (isMounted) setIapReady(false);
-      }
-    }
-
-    initIap();
-
-    return () => {
-      isMounted = false;
-      try {
-        purchaseUpdateSub.current?.remove?.();
-        purchaseErrorSub.current?.remove?.();
-      } catch {}
-      try {
-        RNIap.endConnection();
-      } catch {}
-    };
   }, [user?.id]);
 
   // ---------------------------
@@ -220,10 +126,11 @@ export default function AboutScreen() {
 
         // If no record or no trial_ends_at => set trial based on created_at (once)
         const createdAt = user.created_at ? new Date(user.created_at) : new Date();
-        const defaultTrialEnds = new Date(createdAt.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+        const defaultTrialEnds = new Date(
+          createdAt.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000
+        );
 
-        const resolvedTrialEndsAt =
-          data?.trial_ends_at ?? defaultTrialEnds.toISOString();
+        const resolvedTrialEndsAt = data?.trial_ends_at ?? defaultTrialEnds.toISOString();
 
         // Upsert trial_ends_at if missing (safe)
         if (!data?.trial_ends_at) {
@@ -247,9 +154,10 @@ export default function AboutScreen() {
           setSubStatusRaw(isActive ? 'active' : 'free');
           setSubExpiresAt(data?.subscription_expires_at ?? null);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('Failed to load subscription', err);
-        if (isMounted) setSubError(err?.message ?? 'Failed to load subscription status.');
+        const msg = err instanceof Error ? err.message : 'Failed to load subscription status.';
+        if (isMounted) setSubError(msg);
       } finally {
         if (isMounted) setIsLoadingSub(false);
       }
@@ -305,73 +213,16 @@ export default function AboutScreen() {
   // Actions
   // ---------------------------
   const handleSubscribe = async () => {
-    if (!user) return;
-    if (!iapReady) {
-      setSubError('In-app purchases are not ready yet. Try again in a few seconds.');
-      return;
-    }
-
-    setSubError(null);
-    setIapLoading(true);
-
-    try {
-      // iOS StoreKit2 path is handled internally by react-native-iap
-      await RNIap.requestSubscription({ sku: SUBSCRIPTION_PRODUCT_ID });
-      // дальнейшее обработает purchaseUpdatedListener
-    } catch (e: any) {
-      console.warn('requestSubscription error', e);
-      setIapLoading(false);
-      if (e?.code === 'E_USER_CANCELLED') return;
-      setSubError(e?.message ?? 'Failed to start subscription.');
-    }
+    // IAP ещё не подключён — сейчас тестируем доступ через Supabase (A/B/C)
+    setSubError(
+      `IAP is not connected in this build yet. For now, set subscription_status/expiry in Supabase. (${SUBSCRIPTION_PRODUCT_ID})`
+    );
+    Alert.alert('Subscribe', 'IAP is not connected yet in this build.');
   };
 
   const handleRestore = async () => {
-    if (!user) return;
-    if (!iapReady) {
-      setSubError('In-app purchases are not ready yet. Try again in a few seconds.');
-      return;
-    }
-
-    setSubError(null);
-    setIapLoading(true);
-
-    try {
-      const purchases = await RNIap.getAvailablePurchases();
-
-      const hasSub = purchases?.some((p) => p.productId === SUBSCRIPTION_PRODUCT_ID);
-      if (!hasSub) {
-        setIapLoading(false);
-        Alert.alert('Restore', 'No active purchases found for this Apple ID.');
-        return;
-      }
-
-      // MVP: if found, mark active for 30 days
-      const now = new Date();
-      const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-      const { error } = await supabase
-        .from('sender_profiles')
-        .upsert(
-          {
-            user_id: user.id,
-            subscription_status: 'active',
-            subscription_expires_at: expires.toISOString(),
-          },
-          { onConflict: 'user_id' }
-        );
-
-      if (error) throw error;
-
-      setSubStatusRaw('active');
-      setSubExpiresAt(expires.toISOString());
-      Alert.alert('Restore', 'Subscription restored.');
-    } catch (e: any) {
-      console.warn('restore error', e);
-      setSubError(e?.message ?? 'Failed to restore purchases.');
-    } finally {
-      setIapLoading(false);
-    }
+    setSubError('Restore is not available until IAP is connected.');
+    Alert.alert('Restore', 'IAP is not connected yet in this build.');
   };
 
   const handleManageSubscription = async () => {
@@ -473,9 +324,7 @@ export default function AboutScreen() {
           )}
 
           {/* Free */}
-          {(accessState === 'sub_inactive') && (
-            <Text style={styles.cardPrice}>$4.99 / month</Text>
-          )}
+          {accessState === 'sub_inactive' && <Text style={styles.cardPrice}>$4.99 / month</Text>}
 
           <Text style={styles.cardFooter}>
             Because some voices are <Text style={styles.cardFooterAccent}>worth keeping</Text>
@@ -839,7 +688,12 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     textAlign: 'center',
   },
-  supportEmailRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  supportEmailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
   supportEmailIcon: { fontSize: 14, color: '#00B8D9', marginRight: 6 },
   supportEmail: { fontSize: 13, fontWeight: '600', color: '#00B8D9' },
 
@@ -876,9 +730,21 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     maxHeight: '80%',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF', textAlign: 'center', marginBottom: 16 },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
   modalScrollView: { maxHeight: 400, marginBottom: 16 },
-  modalBodyText: { fontSize: 14, lineHeight: 20, color: '#FFFFFF', textAlign: 'left', marginBottom: 12 },
+  modalBodyText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#FFFFFF',
+    textAlign: 'left',
+    marginBottom: 12,
+  },
   modalCloseButton: {
     width: '100%',
     borderRadius: 8,
@@ -889,5 +755,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalCloseText: { fontSize: 15, fontWeight: '500', color: '#FFFFFF', textAlign: 'center' },
+  modalCloseText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
 });
