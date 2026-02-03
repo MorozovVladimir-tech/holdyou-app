@@ -135,8 +135,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     (async () => {
       try {
-        // Даём AsyncStorage инициализироваться (RN/Expo)
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Даём AsyncStorage полностью инициализироваться (RN/Expo)
+        await new Promise(resolve => setTimeout(resolve, 250));
 
         if (!isMounted) return;
 
@@ -146,8 +146,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         if (!isMounted) return;
 
-        if (!session && isMounted) {
-          await new Promise(resolve => setTimeout(resolve, 200));
+        for (const delayMs of [200, 400]) {
+          if (session) break;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
           if (!isMounted) return;
           const next = await supabase.auth.getSession();
           session = next.data.session;
@@ -206,6 +207,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       .replace(/^\/+/, '')
       .toLowerCase();
 
+    // holdyou:/// или пустой path — не обрабатываем как callback (DeepLinkGate перенаправит)
+    if (!fullPath || fullPath === '/') return;
     if (!fullPath.startsWith('auth/callback')) return;
 
     if (isExchangingRef.current) {

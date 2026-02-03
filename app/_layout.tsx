@@ -35,7 +35,7 @@ export const unstable_settings = {
 
 function DeepLinkGate() {
   const router = useRouter();
-  const { refreshUser } = useAuth();
+  const { refreshUser, user } = useAuth();
 
   const handleIncomingUrl = async (url: string | null) => {
     if (!url) return;
@@ -44,7 +44,13 @@ function DeepLinkGate() {
     const path = (parsed.path || '').replace(/^\/+/, '');
     const lowerPath = path.toLowerCase();
 
-    // ✅ confirmed оставляем как есть (только runtime события)
+    // holdyou:/// или пустой path — не показывать "Unmatched Route", сразу вести в приложение или логин
+    if (!path || path === '/' || url === 'holdyou://' || url === 'holdyou:///') {
+      router.replace((user ? '/(tabs)/talk' : '/onboarding/login') as any);
+      return;
+    }
+
+    // confirmed (без токенов — юзер нажал "Я подтвердил" в приложении)
     if (lowerPath.startsWith('confirmed')) {
       try {
         await refreshUser();
@@ -53,19 +59,21 @@ function DeepLinkGate() {
       router.replace('/onboarding/login' as any);
       return;
     }
-
-    // ❗️ reset-password тут НЕ обрабатываем
-    // ❗️ getInitialURL здесь НЕ трогаем (чтобы не съесть initialUrl у reset/confirmed)
   };
 
   useEffect(() => {
+    (async () => {
+      const initialUrl = await Linking.getInitialURL();
+      if (initialUrl) await handleIncomingUrl(initialUrl);
+    })();
+
     const sub = Linking.addEventListener('url', ({ url }) => {
       handleIncomingUrl(url);
     });
 
     return () => sub.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user]);
 
   return null;
 }
@@ -126,19 +134,20 @@ function PushGate() {
   return null;
 }
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+function AuthenticatedLayout({ colorScheme }: { colorScheme: 'light' | 'dark' | null | undefined }) {
+  const { user } = useAuth();
+  // При смене user (например после подтверждения почты) перемонтируем дерево — данные нового пользователя
+  const userKey = user?.id ?? 'anon';
 
   return (
-    <AuthProvider>
-      <SenderProvider>
-        <TalkProvider>
-          <SubscriptionProvider>
-            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-              <DeepLinkGate />
-              <PushGate />
+    <SenderProvider key={userKey}>
+      <TalkProvider>
+        <SubscriptionProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <DeepLinkGate />
+            <PushGate />
 
-              <Stack initialRouteName="onboarding">
+            <Stack initialRouteName="onboarding">
                 <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
@@ -156,6 +165,15 @@ export default function RootLayout() {
           </SubscriptionProvider>
         </TalkProvider>
       </SenderProvider>
+  );
+}
+
+export default function RootLayout() {
+  const colorScheme = useColorScheme();
+
+  return (
+    <AuthProvider>
+      <AuthenticatedLayout colorScheme={colorScheme} />
     </AuthProvider>
   );
 }
