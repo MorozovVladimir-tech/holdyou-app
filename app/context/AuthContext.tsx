@@ -12,8 +12,11 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
+
+const SENDER_PROFILE_STORAGE_KEY = 'holdyou_sender_profile_v2';
 
 // Web Client ID — OAuth 2.0 Client ID типа "Web application". Нужен для id_token.
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
@@ -211,6 +214,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!fullPath || fullPath === '/') return;
     if (!fullPath.startsWith('auth/callback')) return;
 
+    const hasTokens = !!(parsed.queryParams?.access_token && parsed.queryParams?.refresh_token);
+    console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
+
     if (isExchangingRef.current) {
       console.log('[Auth] skip duplicate callback');
       return;
@@ -356,7 +362,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const logout = async (): Promise<void> => {
+    const currentUserId = user?.id;
     await supabase.auth.signOut();
+    if (currentUserId) {
+      try {
+        await AsyncStorage.removeItem(`${SENDER_PROFILE_STORAGE_KEY}_${currentUserId}`);
+      } catch {}
+    }
     setUser(null);
   };
 
