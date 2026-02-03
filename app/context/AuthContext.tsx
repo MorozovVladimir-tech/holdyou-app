@@ -157,9 +157,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
           session = next.data.session;
         }
 
+        const uid = session?.user?.id ?? null;
+        const uEmail = (session?.user as any)?.email ?? null;
+        console.log('[Auth] init getSession: hasSession=', !!session, 'userId=', uid ?? 'null', 'email=', uEmail ?? 'null');
         applySession(session);
       } catch (e) {
-        console.warn('getSession error', e);
+        console.warn('[Auth] getSession error', e);
       } finally {
         if (isMounted) setAuthLoading(false);
       }
@@ -241,12 +244,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return;
         }
         setUser(data.session?.user ?? null);
-        // Полный объект user с email и т.д. — иначе Profile/чат могут не видеть email
         const refreshed = await refreshUser();
         if (refreshed) await ensureSenderProfile(refreshed);
-        // Даём storage записать сессию (RN/Expo) — иначе после перезапуска сессия может не восстановиться
         await supabase.auth.getSession();
-        console.log('[Auth] email confirmation session set');
+        console.log('[Auth] email confirm done: userId=', refreshed?.id ?? 'null', 'email=', (refreshed as any)?.email ?? 'null');
         return;
       }
 
@@ -277,6 +278,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     (async () => {
       try {
         const initialUrl = await Linking.getInitialURL();
+        console.log('[Auth] getInitialURL=', initialUrl ? initialUrl.substring(0, 60) + '...' : 'null');
         if (cancelled) return;
         if (initialUrl) {
           await handleAuthCallbackUrl(initialUrl);
@@ -314,7 +316,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     });
 
     if (error) {
-      console.warn('loginWithEmail error', error.message);
+      console.warn('[Auth] loginWithEmail error:', error.message, 'status=', (error as any).status);
       return null;
     }
 
