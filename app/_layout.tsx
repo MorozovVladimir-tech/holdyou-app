@@ -8,6 +8,7 @@ import * as Linking from 'expo-linking';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { supabase } from './lib/supabaseClient';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SenderProvider } from './context/SenderContext';
 import { TalkProvider } from './context/TalkContext';
@@ -44,9 +45,13 @@ function DeepLinkGate() {
     const path = (parsed.path || '').replace(/^\/+/, '');
     const lowerPath = path.toLowerCase();
 
-    // holdyou:/// или пустой path — не показывать "Unmatched Route", сразу вести в приложение или логин
+    // holdyou:/// или пустой path — даём время обработать auth/callback?tokens (подтверждение почты), потом редирект
     if (!path || path === '/' || url === 'holdyou://' || url === 'holdyou:///') {
-      router.replace((user ? '/(tabs)/talk' : '/onboarding/login') as any);
+      setTimeout(async () => {
+        const { data } = await supabase.auth.getSession();
+        const hasSession = !!data.session?.user;
+        router.replace((hasSession ? '/(tabs)/talk' : '/onboarding/login') as any);
+      }, 900);
       return;
     }
 
