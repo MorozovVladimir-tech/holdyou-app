@@ -126,20 +126,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     let isMounted = true;
 
+    const applySession = (session: { user: unknown } | null) => {
+      if (!isMounted) return;
+      const sessionUser = session?.user ?? null;
+      setUser(sessionUser as User | null);
+      if (sessionUser) ensureSenderProfile(sessionUser as User);
+    };
+
     (async () => {
       try {
-        const {
+        // Даём AsyncStorage инициализироваться (RN/Expo)
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        if (!isMounted) return;
+
+        let {
           data: { session },
         } = await supabase.auth.getSession();
 
         if (!isMounted) return;
 
-        const sessionUser = session?.user ?? null;
-        setUser(sessionUser);
-
-        if (sessionUser) {
-          await ensureSenderProfile(sessionUser);
+        if (!session && isMounted) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+          if (!isMounted) return;
+          const next = await supabase.auth.getSession();
+          session = next.data.session;
         }
+
+        applySession(session);
       } catch (e) {
         console.warn('getSession error', e);
       } finally {
@@ -149,14 +163,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
-
-      const sessionUser = session?.user ?? null;
-      setUser(sessionUser);
-
-      if (sessionUser) {
-        await ensureSenderProfile(sessionUser);
+      // INITIAL_SESSION — сессия подгружена из storage при старте клиента
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        applySession(session);
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
       }
     });
 
@@ -180,9 +193,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   // ======================
-  // OAUTH CALLBACK HANDLER
+  // OAUTH / EMAIL CONFIRM CALLBACK HANDLER
   // ======================
-  const handleOAuthUrl = async (url: string) => {
+  const handleAuthCallbackUrl = async (url: string) => {
     if (!url) return;
 
     const parsed = Linking.parse(url);
@@ -196,33 +209,50 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!fullPath.startsWith('auth/callback')) return;
 
     if (isExchangingRef.current) {
-      console.log('[OAuth] skip duplicate callback while exchanging');
+      console.log('[Auth] skip duplicate callback');
       return;
     }
     isExchangingRef.current = true;
 
     try {
+      const q = parsed.queryParams || {};
+      const accessToken = (q.access_token as string) ?? '';
+      const refreshToken = (q.refresh_token as string) ?? '';
       const code =
-        (parsed.queryParams?.code as string | undefined) ??
-        (parsed.queryParams?.authorization_code as string | undefined);
+        (q.code as string) ?? (q.authorization_code as string) ?? '';
 
+      // Подтверждение почты: Supabase редиректит с access_token и refresh_token в hash → веб пробрасывает в query
+      if (accessToken && refreshToken) {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (error) {
+          console.warn('[Auth] setSession error', error);
+          return;
+        }
+        const sessionUser = data.session?.user ?? null;
+        setUser(sessionUser);
+        if (sessionUser) await ensureSenderProfile(sessionUser);
+        console.log('[Auth] email confirmation session set');
+        return;
+      }
+
+      // OAuth: code exchange
       if (!code) {
-        console.warn('[OAuth] callback without code, skip');
+        console.warn('[Auth] callback without code or tokens, skip');
         return;
       }
 
       const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
       if (exErr) {
-        console.warn('[OAuth] exchangeCodeForSession error', exErr);
+        console.warn('[Auth] exchangeCodeForSession error', exErr);
         throw exErr;
       }
 
       const refreshed = await refreshUser();
-      if (refreshed) {
-        await ensureSenderProfile(refreshed);
-      }
-
-      console.log('[OAuth] session exchanged + user refreshed');
+      if (refreshed) await ensureSenderProfile(refreshed);
+      console.log('[Auth] OAuth session exchanged');
     } finally {
       isExchangingRef.current = false;
     }
@@ -237,19 +267,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const initialUrl = await Linking.getInitialURL();
         if (cancelled) return;
         if (initialUrl) {
-          await handleOAuthUrl(initialUrl);
+          await handleAuthCallbackUrl(initialUrl);
         }
       } catch (e) {
-        console.warn('[OAuth] getInitialURL/handle error', e);
+        console.warn('[Auth] getInitialURL/handle error', e);
       }
     })();
 
     // runtime events
     const sub = Linking.addEventListener('url', async ({ url }) => {
       try {
-        await handleOAuthUrl(url);
+        await handleAuthCallbackUrl(url);
       } catch (e) {
-        console.warn('[OAuth] event handle error', e);
+        console.warn('[Auth] url handle error', e);
       }
     });
 
@@ -348,7 +378,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const result = await WebBrowser.openAuthSessionAsync(data.url, appReturnUrl);
 
     if (result.type === 'success' && result.url) {
-      await handleOAuthUrl(result.url);
+      await handleAuthCallbackUrl(result.url);
     }
   };
 

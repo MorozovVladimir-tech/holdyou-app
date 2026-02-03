@@ -294,6 +294,12 @@ export default function Login() {
     try {
       const user = await loginWithEmail(email, loginPassword);
 
+      // Ошибка входа (неверный пароль/email) — показываем ошибку, НЕ экран подтверждения
+      if (user === null) {
+        setErrorMessage('Invalid login credentials. Check your email and password.');
+        return;
+      }
+
       const anyUser = user as unknown as {
         email_confirmed_at?: string | null;
         confirmed_at?: string | null;
