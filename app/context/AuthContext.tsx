@@ -240,9 +240,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
           console.warn('[Auth] setSession error', error);
           return;
         }
-        const sessionUser = data.session?.user ?? null;
-        setUser(sessionUser);
-        if (sessionUser) await ensureSenderProfile(sessionUser);
+        setUser(data.session?.user ?? null);
+        // Полный объект user с email и т.д. — иначе Profile/чат могут не видеть email
+        const refreshed = await refreshUser();
+        if (refreshed) await ensureSenderProfile(refreshed);
+        // Даём storage записать сессию (RN/Expo) — иначе после перезапуска сессия может не восстановиться
+        await supabase.auth.getSession();
         console.log('[Auth] email confirmation session set');
         return;
       }
