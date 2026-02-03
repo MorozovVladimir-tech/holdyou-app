@@ -22,6 +22,9 @@ const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 
 WebBrowser.maybeCompleteAuthSession();
 
+// ✅ Триал (дни)
+const TRIAL_DAYS = 5;
+
 function calcIsEmailConfirmed(u: User | null): boolean {
   if (!u) return false;
 
@@ -70,8 +73,52 @@ export function AuthProvider({ children }: AuthProviderProps) {
     []
   );
 
-  // ✅ защита от двойной обработки callback (cold start + event / двойной редирект)
+  // ✅ защита от двойной обработки callback
   const isExchangingRef = useRef(false);
+
+  // ======================
+  // ENSURE sender_profiles (trial bootstrap)
+  // ======================
+  const ensureSenderProfile = async (u: User) => {
+    try {
+      const { data, error } = await supabase
+        .from('sender_profiles')
+        .select('trial_ends_at')
+        .eq('user_id', u.id)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('[ensureSenderProfile] select error', error);
+        return;
+      }
+
+      if (data?.trial_ends_at) return;
+
+      const createdAt = u.created_at ? new Date(u.created_at) : new Date();
+      const trialEnds = new Date(
+        createdAt.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000
+      );
+
+      const { error: upsertErr } = await supabase
+        .from('sender_profiles')
+        .upsert(
+          {
+            user_id: u.id,
+            trial_ends_at: trialEnds.toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+
+      if (upsertErr) {
+        console.warn('[ensureSenderProfile] upsert error', upsertErr);
+        return;
+      }
+
+      console.log('[ensureSenderProfile] trial_ends_at created');
+    } catch (e) {
+      console.warn('[ensureSenderProfile] unexpected error', e);
+    }
+  };
 
   // ======================
   // INIT SESSION
@@ -86,7 +133,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } = await supabase.auth.getSession();
 
         if (!isMounted) return;
-        setUser(session?.user ?? null);
+
+        const sessionUser = session?.user ?? null;
+        setUser(sessionUser);
+
+        if (sessionUser) {
+          await ensureSenderProfile(sessionUser);
+        }
       } catch (e) {
         console.warn('getSession error', e);
       } finally {
@@ -96,9 +149,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!isMounted) return;
-      setUser(session?.user ?? null);
+
+      const sessionUser = session?.user ?? null;
+      setUser(sessionUser);
+
+      if (sessionUser) {
+        await ensureSenderProfile(sessionUser);
+      }
     });
 
     return () => {
@@ -126,39 +185,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const handleOAuthUrl = async (url: string) => {
     if (!url) return;
 
-    // ВАЖНО: отсекаем всё, что не наш callback
-    // holdyou://auth/callback?code=...
     const parsed = Linking.parse(url);
 
     const fullPath = [parsed.hostname, parsed.path]
       .filter(Boolean)
       .join('/')
-      .replace(/^\/+/, '') // убираем ведущие слэши
+      .replace(/^\/+/, '')
       .toLowerCase();
 
     if (!fullPath.startsWith('auth/callback')) return;
 
-    // защита от дублей
     if (isExchangingRef.current) {
       console.log('[OAuth] skip duplicate callback while exchanging');
       return;
     }
-
     isExchangingRef.current = true;
 
     try {
-      console.log('[OAuth] callback url:', url);
-      console.log('[OAuth] parsed:', {
-        hostname: parsed.hostname,
-        path: parsed.path,
-        fullPath,
-        queryParams: parsed.queryParams,
-      });
-
-      // Если прилетел пустой callback без code — нет смысла продолжать
       const code =
         (parsed.queryParams?.code as string | undefined) ??
         (parsed.queryParams?.authorization_code as string | undefined);
+
       if (!code) {
         console.warn('[OAuth] callback without code, skip');
         return;
@@ -170,7 +217,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw exErr;
       }
 
-      await refreshUser();
+      const refreshed = await refreshUser();
+      if (refreshed) {
+        await ensureSenderProfile(refreshed);
+      }
+
       console.log('[OAuth] session exchanged + user refreshed');
     } finally {
       isExchangingRef.current = false;
@@ -225,8 +276,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       return null;
     }
 
-    setUser(data.user ?? null);
-    return data.user ?? null;
+    // ✅ берём юзера строго из session (реальная сессия)
+    const sessionUser = data.session?.user ?? null;
+    setUser(sessionUser);
+
+    if (sessionUser) {
+      await ensureSenderProfile(sessionUser);
+    }
+
+    return sessionUser;
   };
 
   const registerWithEmail = async (
@@ -245,7 +303,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (error) throw error;
 
-    setUser(data.user ?? null);
+    // ⚠️ При подтверждении email session может быть null — не делаем фейковый логин
+    const sessionUser = data.session?.user ?? null;
+    setUser(sessionUser);
+
+    if (sessionUser) {
+      await ensureSenderProfile(sessionUser);
+    }
+
     return data.user ?? null;
   };
 
@@ -269,7 +334,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        // Веб-мост. Supabase при редиректе на кастомный URL не отдаёт state (баг/ограничение).
         redirectTo: 'https://holdyou.app/auth/callback',
       },
     });
@@ -281,14 +345,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (!data?.url) return;
 
-    console.log('[OAuth] auth url:', data.url);
-    console.log('[OAuth] returnUrl(app):', appReturnUrl);
-
     const result = await WebBrowser.openAuthSessionAsync(data.url, appReturnUrl);
 
-    console.log('[OAuth] browser result:', result);
-
-    // На iOS обычно сюда прилетает уже deep link holdyou://auth/callback?...
     if (result.type === 'success' && result.url) {
       await handleOAuthUrl(result.url);
     }
@@ -302,20 +360,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
       });
+
       if (!credential.identityToken) {
         throw new Error('Apple Sign-In failed: no identity token');
       }
+
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: 'apple',
         token: credential.identityToken,
       });
+
       if (error) throw error;
-      setUser(data.user ?? null);
+
+      const sessionUser = data.session?.user ?? null;
+      setUser(sessionUser);
+
+      if (sessionUser) {
+        await ensureSenderProfile(sessionUser);
+      }
+
       const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
         .filter(Boolean)
         .join(' ')
         .trim();
-      if (fullName && data.user) {
+
+      if (fullName && sessionUser) {
         await supabase.auth.updateUser({ data: { full_name: fullName } });
         await refreshUser();
       }
@@ -323,6 +392,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await completeOAuth('apple');
     }
   };
+
   const signInWithGoogle = async () => {
     const isExpoGo = Constants.appOwnership === 'expo';
     const useNative =
@@ -330,17 +400,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       (Platform.OS === 'ios' || Platform.OS === 'android') &&
       GOOGLE_WEB_CLIENT_ID.length > 0 &&
       (Platform.OS !== 'ios' || GOOGLE_IOS_CLIENT_ID.length > 0);
+
     if (!useNative) {
       await completeOAuth('google');
       return;
     }
+
     try {
       const mod = require('@react-native-google-signin/google-signin');
       const GoogleSignin = mod?.GoogleSignin ?? mod?.default;
+
       if (!GoogleSignin) {
         await completeOAuth('google');
         return;
       }
+
       GoogleSignin.configure({
         webClientId: GOOGLE_WEB_CLIENT_ID,
         ...(Platform.OS === 'ios' &&
@@ -348,20 +422,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
             iosClientId: GOOGLE_IOS_CLIENT_ID,
           }),
       });
+
       if (Platform.OS === 'android') {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       }
+
       const response = await GoogleSignin.signIn();
       if (response.type === 'cancelled') return;
+
       if (response.type !== 'success' || !response.data?.idToken) {
         throw new Error('Google Sign-In failed: no id token');
       }
+
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: 'google',
         token: response.data.idToken,
       });
+
       if (error) throw error;
-      setUser(data.user ?? null);
+
+      const sessionUser = data.session?.user ?? null;
+      setUser(sessionUser);
+
+      if (sessionUser) {
+        await ensureSenderProfile(sessionUser);
+      }
     } catch (e) {
       console.warn('google sign-in error (fallback to web OAuth)', e);
       await completeOAuth('google');
