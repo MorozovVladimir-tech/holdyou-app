@@ -80,6 +80,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const isExchangingRef = useRef(false);
 
   // ======================
+  // SMALL UTILS
+  // ======================
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // ✅ Ждём пока Supabase реально отдаст session (после exchange/setSession на RN бывает задержка записи)
+  const waitForSession = async (
+    label: string,
+    attempts = 6,
+    delaysMs: number[] = [0, 80, 150, 250, 400, 650]
+  ) => {
+    for (let i = 0; i < attempts; i++) {
+      if (delaysMs[i] != null) await sleep(delaysMs[i]!);
+      const { data } = await supabase.auth.getSession();
+      const s = data?.session ?? null;
+      if (s?.user) {
+        console.log(
+          `[Auth] ${label}: session ready on try #${i + 1}`,
+          'userId=',
+          s.user.id,
+          'email=',
+          (s.user as any)?.email ?? 'null'
+        );
+        return s;
+      }
+    }
+    console.warn(`[Auth] ${label}: session still missing after retries`);
+    return null;
+  };
+
+  // ======================
   // ENSURE sender_profiles (trial bootstrap)
   // ======================
   const ensureSenderProfile = async (u: User) => {
@@ -139,8 +169,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     (async () => {
       try {
         // Даём AsyncStorage полностью инициализироваться (RN/Expo)
-        await new Promise(resolve => setTimeout(resolve, 250));
-
+        await sleep(250);
         if (!isMounted) return;
 
         let {
@@ -151,7 +180,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         for (const delayMs of [200, 400]) {
           if (session) break;
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await sleep(delayMs);
           if (!isMounted) return;
           const next = await supabase.auth.getSession();
           session = next.data.session;
@@ -159,7 +188,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         const uid = session?.user?.id ?? null;
         const uEmail = (session?.user as any)?.email ?? null;
-        console.log('[Auth] init getSession: hasSession=', !!session, 'userId=', uid ?? 'null', 'email=', uEmail ?? 'null');
+        console.log(
+          '[Auth] init getSession: hasSession=',
+          !!session,
+          'userId=',
+          uid ?? 'null',
+          'email=',
+          uEmail ?? 'null'
+        );
         applySession(session);
       } catch (e) {
         console.warn('[Auth] getSession error', e);
@@ -172,8 +208,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
-      // INITIAL_SESSION — сессия подгружена из storage при старте клиента
-      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+      if (
+        event === 'INITIAL_SESSION' ||
+        event === 'SIGNED_IN' ||
+        event === 'TOKEN_REFRESHED'
+      ) {
         applySession(session);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
@@ -190,6 +229,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // HELPERS
   // ======================
   const refreshUser = async (): Promise<User | null> => {
+    // ✅ сначала пытаемся взять user из session (на RN это надёжнее, чем getUser сразу после callback)
+    const s = await waitForSession('refreshUser');
+    if (s?.user) {
+      setUser(s.user);
+      return s.user;
+    }
+
+    // fallback (если сессии реально нет)
     const { data, error } = await supabase.auth.getUser();
     if (error) {
       console.warn('refreshUser error', error);
@@ -204,23 +251,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   /** Парсинг query/hash без URLSearchParams — работает везде в RN без полифиллов. */
   const getQueryParam = (url: string, key: string, fromHash = false): string | null => {
-    const part = fromHash ? url.split('#')[1] ?? '' : (url.includes('?') ? url.split('?')[1].split('#')[0] ?? '' : '');
+    const part = fromHash
+      ? url.split('#')[1] ?? ''
+      : (url.includes('?') ? url.split('?')[1].split('#')[0] ?? '' : '');
     const query = part || '';
     for (const segment of query.split('&')) {
+      if (!segment) continue;
       const eq = segment.indexOf('=');
       const k = eq === -1 ? segment : segment.slice(0, eq);
       const v = eq === -1 ? '' : segment.slice(eq + 1);
       try {
-        if (decodeURIComponent(k.trim()) === key) return decodeURIComponent((v ?? '').trim());
+        if (decodeURIComponent(k.trim()) === key) {
+          return decodeURIComponent((v ?? '').trim());
+        }
       } catch (_) {}
     }
     return null;
   };
 
-  /** Извлекает access_token и refresh_token из URL (query или hash). Для подтверждения почты. */
-  const extractSessionFromUrl = (url: string): { access_token: string; refresh_token: string } | null => {
-    const access_token = getQueryParam(url, 'access_token') ?? getQueryParam(url, 'access_token', true);
-    const refresh_token = getQueryParam(url, 'refresh_token') ?? getQueryParam(url, 'refresh_token', true);
+  /** Извлекает access_token и refresh_token из URL (query или hash). */
+  const extractSessionFromUrl = (
+    url: string
+  ): { access_token: string; refresh_token: string } | null => {
+    const access_token =
+      getQueryParam(url, 'access_token') ?? getQueryParam(url, 'access_token', true);
+    const refresh_token =
+      getQueryParam(url, 'refresh_token') ?? getQueryParam(url, 'refresh_token', true);
     if (access_token && refresh_token) return { access_token, refresh_token };
     return null;
   };
@@ -236,24 +292,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       .replace(/^\/+/, '')
       .toLowerCase();
 
-    // Universal Links приносят https://holdyou.app/confirmed?code=... — это тоже callback (PKCE)
+    // Universal Links приносят https://holdyou.app/confirmed?code=... — это callback (PKCE)
     const isHttpsConfirmed =
-      url.includes('holdyou.app') && (url.includes('/confirmed') || url.includes('/auth/callback'));
+      url.startsWith('https://') &&
+      url.includes('holdyou.app') &&
+      (url.includes('/confirmed') || url.includes('/auth/callback'));
+
     const isDeepLinkCallback = fullPath.startsWith('auth/callback');
 
     if (!fullPath && !isHttpsConfirmed) return;
     if (fullPath && fullPath !== '/' && !isDeepLinkCallback && !isHttpsConfirmed) return;
-
-    const q = parsed.queryParams || {};
-    const accessToken =
-      (q.access_token as string) ?? getQueryParam(url, 'access_token') ?? getQueryParam(url, 'access_token', true) ?? '';
-    const refreshToken =
-      (q.refresh_token as string) ?? getQueryParam(url, 'refresh_token') ?? getQueryParam(url, 'refresh_token', true) ?? '';
-    const hasTokens = !!(accessToken && refreshToken);
-    if (isHttpsConfirmed) {
-      console.log('[Auth] https callback (confirmed/auth) url, will try code exchange');
-    }
-    console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
 
     if (isExchangingRef.current) {
       console.log('[Auth] skip duplicate callback');
@@ -262,51 +310,63 @@ export function AuthProvider({ children }: AuthProviderProps) {
     isExchangingRef.current = true;
 
     try {
-      // code: сначала Linking.parse, потом ручной парсинг (без URLSearchParams — надёжно в RN)
-      const code =
-        ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
-        getQueryParam(url, 'code') ||
-        getQueryParam(url, 'code', true) ||
-        getQueryParam(url, 'authorization_code') ||
-        getQueryParam(url, 'authorization_code', true);
+      const q = parsed.queryParams || {};
 
-      // Подтверждение почты: токены в URL (query или hash) → setSession
+      const accessToken =
+        (q.access_token as string) ??
+        getQueryParam(url, 'access_token') ??
+        getQueryParam(url, 'access_token', true) ??
+        '';
+
+      const refreshToken =
+        (q.refresh_token as string) ??
+        getQueryParam(url, 'refresh_token') ??
+        getQueryParam(url, 'refresh_token', true) ??
+        '';
+
+      const hasTokens = !!(accessToken && refreshToken);
+
+      console.log('[Auth] url event:', url);
+      if (isHttpsConfirmed) {
+        console.log('[Auth] https callback (confirmed/auth) detected');
+      }
+      console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
+
+      // 1) Если вдруг прилетели токены -> setSession
       const sessionFromUrl = extractSessionFromUrl(url);
       if (sessionFromUrl) {
-        const { data, error } = await supabase.auth.setSession(sessionFromUrl);
+        const { error } = await supabase.auth.setSession(sessionFromUrl);
         if (error) {
           console.warn('[Auth] setSession error', error);
           return;
         }
-        const sessionUser = data.session?.user ?? null;
-        setUser(sessionUser);
-        if (sessionUser) await ensureSenderProfile(sessionUser);
 
-        // refreshSession() заставляет клиент записать сессию в storage (на iOS/RN setSession иногда не персистит)
-        try {
-          const { data: refreshData } = await supabase.auth.refreshSession();
-          if (refreshData?.session?.user) {
-            setUser(refreshData.session.user);
-            await ensureSenderProfile(refreshData.session.user);
-          }
-        } catch (_) {}
+        // ✅ ждём пока session реально появится, и только потом ставим user
+        const s = await waitForSession('after setSession');
+        const su = s?.user ?? null;
 
-        // Полный user с email — refreshUser() сразу после setSession иногда даёт Auth session missing
-        setTimeout(async () => {
-          const u = await refreshUser();
-          if (u) await ensureSenderProfile(u);
-        }, 600);
+        setUser(su);
+        if (su) await ensureSenderProfile(su);
 
         console.log(
-          '[Auth] email confirm done: userId=',
-          sessionUser?.id ?? 'null',
+          '[Auth] setSession done: hasSession=',
+          !!s,
+          'userId=',
+          su?.id ?? 'null',
           'email=',
-          (sessionUser as any)?.email ?? 'null'
+          (su as any)?.email ?? 'null'
         );
         return;
       }
 
-      // OAuth: code exchange
+      // 2) Основной сценарий confirmed/OAuth: PKCE code
+      const code =
+        ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
+        getQueryParam(url, 'code') ||
+        getQueryParam(url, 'authorization_code') ||
+        getQueryParam(url, 'code', true) ||
+        getQueryParam(url, 'authorization_code', true);
+
       if (!code) {
         console.warn('[Auth] callback without code or tokens, skip');
         return;
@@ -318,17 +378,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw exErr;
       }
 
-      const refreshed = await refreshUser();
-      if (refreshed) await ensureSenderProfile(refreshed);
-      console.log('[Auth] OAuth session exchanged');
-      const { data: sessionData } = await supabase.auth.getSession();
+      // ✅ ключевой фикс: ждём session, не полагаемся на getUser() сразу
+      const s = await waitForSession('after exchange');
+      const su = s?.user ?? null;
+
+      setUser(su);
+      if (su) await ensureSenderProfile(su);
+
       console.log(
         '[Auth] after exchange: hasSession=',
-        !!sessionData?.session,
+        !!s,
         'userId=',
-        sessionData?.session?.user?.id ?? 'null',
+        su?.id ?? 'null',
         'email=',
-        sessionData?.session?.user?.email ?? 'null'
+        (su as any)?.email ?? 'null'
       );
     } finally {
       isExchangingRef.current = false;
@@ -354,19 +417,22 @@ export function AuthProvider({ children }: AuthProviderProps) {
       try {
         if (await tryProcess('getInitialURL (0ms)')) return;
         console.log('[Auth] getInitialURL= null');
-        await new Promise(r => setTimeout(r, 400));
+        await sleep(400);
         if (await tryProcess('getInitialURL (400ms)')) return;
-        await new Promise(r => setTimeout(r, 600));
+        await sleep(600);
         if (await tryProcess('getInitialURL (1000ms)')) return;
       } catch (e) {
         console.warn('[Auth] getInitialURL/handle error', e);
       }
     })();
 
-    // runtime: URL может прийти и через событие (например при открытии из Safari)
+    // runtime event
     const sub = Linking.addEventListener('url', async ({ url }) => {
       try {
-        console.log('[Auth] url event:', url ? url.substring(0, 80) + (url.length > 80 ? '...' : '') : 'null');
+        console.log(
+          '[Auth] url event:',
+          url ? url.substring(0, 120) + (url.length > 120 ? '...' : '') : 'null'
+        );
         if (url) await handleAuthCallbackUrl(url);
       } catch (e) {
         console.warn('[Auth] url handle error', e);
@@ -392,11 +458,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
     });
 
     if (error) {
-      console.warn('[Auth] loginWithEmail error:', error.message, 'status=', (error as any).status);
+      console.warn(
+        '[Auth] loginWithEmail error:',
+        error.message,
+        'status=',
+        (error as any).status
+      );
       return null;
     }
 
-    // ✅ берём юзера строго из session (реальная сессия)
     const sessionUser = data.session?.user ?? null;
     setUser(sessionUser);
 
@@ -423,7 +493,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     if (error) throw error;
 
-    // ⚠️ При подтверждении email session может быть null — не делаем фейковый логин
+    // ⚠️ при signUp session может быть null до подтверждения — это нормально
     const sessionUser = data.session?.user ?? null;
     setUser(sessionUser);
 
@@ -447,7 +517,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await supabase.auth.signOut();
     if (currentUserId) {
       try {
-        await AsyncStorage.removeItem(`${SENDER_PROFILE_STORAGE_KEY}_${currentUserId}`);
+        await AsyncStorage.removeItem(
+          `${SENDER_PROFILE_STORAGE_KEY}_${currentUserId}`
+        );
       } catch {}
     }
     setUser(null);
@@ -505,7 +577,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         await ensureSenderProfile(sessionUser);
       }
 
-      const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+      const fullName = [
+        credential.fullName?.givenName,
+        credential.fullName?.familyName,
+      ]
         .filter(Boolean)
         .join(' ')
         .trim();
@@ -550,7 +625,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       if (Platform.OS === 'android') {
-        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+        await GoogleSignin.hasPlayServices({
+          showPlayServicesUpdateDialog: true,
+        });
       }
 
       const response = await GoogleSignin.signIn();
