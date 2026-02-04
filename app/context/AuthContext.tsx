@@ -217,7 +217,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!fullPath || fullPath === '/') return;
     if (!fullPath.startsWith('auth/callback')) return;
 
-    const hasTokens = !!(parsed.queryParams?.access_token && parsed.queryParams?.refresh_token);
+    // Linking.parse() часто НЕ видит fragment (#...), поэтому дополнительно парсим hash вручную
+    const rawHash = url.includes('#') ? url.split('#')[1] : '';
+    const hashParams = rawHash ? new URLSearchParams(rawHash) : null;
+
+    const q = parsed.queryParams || {};
+    const accessTokenFromQuery = (q.access_token as string) ?? '';
+    const refreshTokenFromQuery = (q.refresh_token as string) ?? '';
+    const accessTokenFromHash = hashParams?.get('access_token') ?? '';
+    const refreshTokenFromHash = hashParams?.get('refresh_token') ?? '';
+
+    const accessToken = accessTokenFromQuery || accessTokenFromHash;
+    const refreshToken = refreshTokenFromQuery || refreshTokenFromHash;
+
+    const hasTokens = !!(accessToken && refreshToken);
     console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
 
     if (isExchangingRef.current) {
@@ -227,11 +240,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     isExchangingRef.current = true;
 
     try {
-      const q = parsed.queryParams || {};
-      const accessToken = (q.access_token as string) ?? '';
-      const refreshToken = (q.refresh_token as string) ?? '';
       const code =
-        (q.code as string) ?? (q.authorization_code as string) ?? '';
+        ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
+        (hashParams?.get('code') ?? '') ||
+        (hashParams?.get('authorization_code') ?? '');
 
       // Подтверждение почты: Supabase редиректит с access_token и refresh_token в hash → веб пробрасывает в query
       if (accessToken && refreshToken) {
@@ -262,7 +274,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
           if (u) await ensureSenderProfile(u);
         }, 600);
 
-        console.log('[Auth] email confirm done: userId=', sessionUser?.id ?? 'null', 'email=', (sessionUser as any)?.email ?? 'null');
+        console.log(
+          '[Auth] email confirm done: userId=',
+          sessionUser?.id ?? 'null',
+          'email=',
+          (sessionUser as any)?.email ?? 'null'
+        );
         return;
       }
 
