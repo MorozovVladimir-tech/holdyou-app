@@ -202,13 +202,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   // OAUTH / EMAIL CONFIRM CALLBACK HANDLER
   // ======================
+  /** Парсинг query/hash без URLSearchParams — работает везде в RN без полифиллов. */
+  const getQueryParam = (url: string, key: string, fromHash = false): string | null => {
+    const part = fromHash ? url.split('#')[1] ?? '' : (url.includes('?') ? url.split('?')[1].split('#')[0] ?? '' : '');
+    const query = part || '';
+    for (const segment of query.split('&')) {
+      const eq = segment.indexOf('=');
+      const k = eq === -1 ? segment : segment.slice(0, eq);
+      const v = eq === -1 ? '' : segment.slice(eq + 1);
+      try {
+        if (decodeURIComponent(k.trim()) === key) return decodeURIComponent((v ?? '').trim());
+      } catch (_) {}
+    }
+    return null;
+  };
+
   /** Извлекает access_token и refresh_token из URL (query или hash). Для подтверждения почты. */
   const extractSessionFromUrl = (url: string): { access_token: string; refresh_token: string } | null => {
-    const hash = url.split('#')[1] || '';
-    const query = url.split('?')[1] || '';
-    const params = new URLSearchParams(hash || query);
-    const access_token = params.get('access_token');
-    const refresh_token = params.get('refresh_token');
+    const access_token = getQueryParam(url, 'access_token') ?? getQueryParam(url, 'access_token', true);
+    const refresh_token = getQueryParam(url, 'refresh_token') ?? getQueryParam(url, 'refresh_token', true);
     if (access_token && refresh_token) return { access_token, refresh_token };
     return null;
   };
@@ -224,24 +236,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
       .replace(/^\/+/, '')
       .toLowerCase();
 
-    // holdyou:/// или пустой path — не обрабатываем как callback (DeepLinkGate перенаправит)
-    if (!fullPath || fullPath === '/') return;
-    if (!fullPath.startsWith('auth/callback')) return;
+    // Universal Links приносят https://holdyou.app/confirmed?code=... — это тоже callback (PKCE)
+    const isHttpsConfirmed =
+      url.includes('holdyou.app') && (url.includes('/confirmed') || url.includes('/auth/callback'));
+    const isDeepLinkCallback = fullPath.startsWith('auth/callback');
 
-    // Linking.parse() часто НЕ видит fragment (#...), поэтому дополнительно парсим hash вручную
-    const rawHash = url.includes('#') ? url.split('#')[1] : '';
-    const hashParams = rawHash ? new URLSearchParams(rawHash) : null;
+    if (!fullPath && !isHttpsConfirmed) return;
+    if (fullPath && fullPath !== '/' && !isDeepLinkCallback && !isHttpsConfirmed) return;
 
     const q = parsed.queryParams || {};
-    const accessTokenFromQuery = (q.access_token as string) ?? '';
-    const refreshTokenFromQuery = (q.refresh_token as string) ?? '';
-    const accessTokenFromHash = hashParams?.get('access_token') ?? '';
-    const refreshTokenFromHash = hashParams?.get('refresh_token') ?? '';
-
-    const accessToken = accessTokenFromQuery || accessTokenFromHash;
-    const refreshToken = refreshTokenFromQuery || refreshTokenFromHash;
-
+    const accessToken =
+      (q.access_token as string) ?? getQueryParam(url, 'access_token') ?? getQueryParam(url, 'access_token', true) ?? '';
+    const refreshToken =
+      (q.refresh_token as string) ?? getQueryParam(url, 'refresh_token') ?? getQueryParam(url, 'refresh_token', true) ?? '';
     const hasTokens = !!(accessToken && refreshToken);
+    if (isHttpsConfirmed) {
+      console.log('[Auth] https callback (confirmed/auth) url, will try code exchange');
+    }
     console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
 
     if (isExchangingRef.current) {
@@ -251,10 +262,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     isExchangingRef.current = true;
 
     try {
+      // code: сначала Linking.parse, потом ручной парсинг (без URLSearchParams — надёжно в RN)
       const code =
         ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
-        (hashParams?.get('code') ?? '') ||
-        (hashParams?.get('authorization_code') ?? '');
+        getQueryParam(url, 'code') ||
+        getQueryParam(url, 'code', true) ||
+        getQueryParam(url, 'authorization_code') ||
+        getQueryParam(url, 'authorization_code', true);
 
       // Подтверждение почты: токены в URL (query или hash) → setSession
       const sessionFromUrl = extractSessionFromUrl(url);
@@ -307,6 +321,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const refreshed = await refreshUser();
       if (refreshed) await ensureSenderProfile(refreshed);
       console.log('[Auth] OAuth session exchanged');
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log(
+        '[Auth] after exchange: hasSession=',
+        !!sessionData?.session,
+        'userId=',
+        sessionData?.session?.user?.id ?? 'null',
+        'email=',
+        sessionData?.session?.user?.email ?? 'null'
+      );
     } finally {
       isExchangingRef.current = false;
     }
