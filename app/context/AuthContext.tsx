@@ -243,11 +243,26 @@ export function AuthProvider({ children }: AuthProviderProps) {
           console.warn('[Auth] setSession error', error);
           return;
         }
-        setUser(data.session?.user ?? null);
-        const refreshed = await refreshUser();
-        if (refreshed) await ensureSenderProfile(refreshed);
-        await supabase.auth.getSession();
-        console.log('[Auth] email confirm done: userId=', refreshed?.id ?? 'null', 'email=', (refreshed as any)?.email ?? 'null');
+        const sessionUser = data.session?.user ?? null;
+        setUser(sessionUser);
+        if (sessionUser) await ensureSenderProfile(sessionUser);
+
+        // refreshSession() заставляет клиент записать сессию в storage (на iOS/RN setSession иногда не персистит)
+        try {
+          const { data: refreshData } = await supabase.auth.refreshSession();
+          if (refreshData?.session?.user) {
+            setUser(refreshData.session.user);
+            await ensureSenderProfile(refreshData.session.user);
+          }
+        } catch (_) {}
+
+        // Полный user с email — refreshUser() сразу после setSession иногда даёт Auth session missing
+        setTimeout(async () => {
+          const u = await refreshUser();
+          if (u) await ensureSenderProfile(u);
+        }, 600);
+
+        console.log('[Auth] email confirm done: userId=', sessionUser?.id ?? 'null', 'email=', (sessionUser as any)?.email ?? 'null');
         return;
       }
 
