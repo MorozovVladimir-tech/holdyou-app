@@ -292,16 +292,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
       .replace(/^\/+/, '')
       .toLowerCase();
 
-    // Universal Links приносят https://holdyou.app/confirmed?code=... — это callback (PKCE)
+    // Email confirm (через Universal Links): https://holdyou.app/confirmed?...
     const isHttpsConfirmed =
       url.startsWith('https://') &&
       url.includes('holdyou.app') &&
-      (url.includes('/confirmed') || url.includes('/auth/callback'));
+      url.includes('/confirmed');
 
+    // Deep link callback (OAuth/другие): holdyou://auth/callback?...
     const isDeepLinkCallback = fullPath.startsWith('auth/callback');
 
-    if (!fullPath && !isHttpsConfirmed) return;
-    if (fullPath && fullPath !== '/' && !isDeepLinkCallback && !isHttpsConfirmed) return;
+    // Разрешаем только два типа входящих URL:
+    if (!isHttpsConfirmed && !isDeepLinkCallback) return;
 
     if (isExchangingRef.current) {
       console.log('[Auth] skip duplicate callback');
@@ -327,12 +328,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const hasTokens = !!(accessToken && refreshToken);
 
       console.log('[Auth] url event:', url);
-      if (isHttpsConfirmed) {
-        console.log('[Auth] https callback (confirmed/auth) detected');
-      }
-      console.log('[Auth] callback URL path=', fullPath, 'hasTokens=', hasTokens);
+      console.log('[Auth] callback URL path=', fullPath, 'isHttpsConfirmed=', isHttpsConfirmed, 'hasTokens=', hasTokens);
 
-      // 1) Если вдруг прилетели токены -> setSession
+      // 1) Email confirm / любые случаи с токенами -> setSession
       const sessionFromUrl = extractSessionFromUrl(url);
       if (sessionFromUrl) {
         const { error } = await supabase.auth.setSession(sessionFromUrl);
@@ -341,7 +339,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return;
         }
 
-        // ✅ ждём пока session реально появится, и только потом ставим user
         const s = await waitForSession('after setSession');
         const su = s?.user ?? null;
 
@@ -359,7 +356,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
-      // 2) Основной сценарий confirmed/OAuth: PKCE code
+      // 2) ВАЖНО: для https://.../confirmed?code=... НЕ ДЕЛАЕМ exchangeCodeForSession
+      // Иначе получишь invalid flow state (потому что это не OAuth flow, state не создавался)
+      if (isHttpsConfirmed) {
+        const code =
+          ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
+          getQueryParam(url, 'code') ||
+          getQueryParam(url, 'authorization_code') ||
+          getQueryParam(url, 'code', true) ||
+          getQueryParam(url, 'authorization_code', true);
+
+        console.warn(
+          '[Auth] confirmed link without tokens; NOT exchanging code in-app (would cause invalid flow state). codePresent=',
+          !!code
+        );
+        return;
+      }
+
+      // 3) OAuth deep link: exchange можно только тут (когда flow state реально создавался signInWithOAuth)
       const code =
         ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
         getQueryParam(url, 'code') ||
@@ -368,7 +382,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         getQueryParam(url, 'authorization_code', true);
 
       if (!code) {
-        console.warn('[Auth] callback without code or tokens, skip');
+        console.warn('[Auth] OAuth callback without code or tokens, skip');
         return;
       }
 
@@ -378,7 +392,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw exErr;
       }
 
-      // ✅ ключевой фикс: ждём session, не полагаемся на getUser() сразу
       const s = await waitForSession('after exchange');
       const su = s?.user ?? null;
 
@@ -487,8 +500,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       password,
       options: {
         data: { full_name: fullName },
-        // ✅ ВАЖНО: подтверждение почты должно возвращать в app scheme, а не на web confirmed
-        emailRedirectTo: appReturnUrl,
+        // ВАЖНО: оставляем confirmed на вебе
+        emailRedirectTo: 'https://holdyou.app/confirmed?source=email',
       },
     });
 
