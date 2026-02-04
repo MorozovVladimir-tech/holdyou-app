@@ -487,7 +487,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       password,
       options: {
         data: { full_name: fullName },
-        emailRedirectTo: 'https://holdyou.app/confirmed?source=email',
+        // ✅ ВАЖНО: подтверждение почты должно возвращать в app scheme, а не на web confirmed
+        emailRedirectTo: appReturnUrl,
       },
     });
 
