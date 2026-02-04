@@ -202,6 +202,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ======================
   // OAUTH / EMAIL CONFIRM CALLBACK HANDLER
   // ======================
+  /** Извлекает access_token и refresh_token из URL (query или hash). Для подтверждения почты. */
+  const extractSessionFromUrl = (url: string): { access_token: string; refresh_token: string } | null => {
+    const hash = url.split('#')[1] || '';
+    const query = url.split('?')[1] || '';
+    const params = new URLSearchParams(hash || query);
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
+    if (access_token && refresh_token) return { access_token, refresh_token };
+    return null;
+  };
+
   const handleAuthCallbackUrl = async (url: string) => {
     if (!url) return;
 
@@ -245,12 +256,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         (hashParams?.get('code') ?? '') ||
         (hashParams?.get('authorization_code') ?? '');
 
-      // Подтверждение почты: Supabase редиректит с access_token и refresh_token в hash → веб пробрасывает в query
-      if (accessToken && refreshToken) {
-        const { data, error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
+      // Подтверждение почты: токены в URL (query или hash) → setSession
+      const sessionFromUrl = extractSessionFromUrl(url);
+      if (sessionFromUrl) {
+        const { data, error } = await supabase.auth.setSession(sessionFromUrl);
         if (error) {
           console.warn('[Auth] setSession error', error);
           return;
@@ -306,24 +315,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     let cancelled = false;
 
-    // cold start
+    // cold start + ретрай: на iOS URL иногда приходит с задержкой
     (async () => {
-      try {
-        const initialUrl = await Linking.getInitialURL();
-        console.log('[Auth] getInitialURL=', initialUrl ? initialUrl.substring(0, 60) + '...' : 'null');
-        if (cancelled) return;
-        if (initialUrl) {
-          await handleAuthCallbackUrl(initialUrl);
+      const tryProcess = async (label: string) => {
+        if (cancelled) return null;
+        const u = await Linking.getInitialURL();
+        if (u) {
+          console.log('[Auth]', label, 'url received, len=', u.length);
+          await handleAuthCallbackUrl(u);
+          return true;
         }
+        return false;
+      };
+
+      try {
+        if (await tryProcess('getInitialURL (0ms)')) return;
+        console.log('[Auth] getInitialURL= null');
+        await new Promise(r => setTimeout(r, 400));
+        if (await tryProcess('getInitialURL (400ms)')) return;
+        await new Promise(r => setTimeout(r, 600));
+        if (await tryProcess('getInitialURL (1000ms)')) return;
       } catch (e) {
         console.warn('[Auth] getInitialURL/handle error', e);
       }
     })();
 
-    // runtime events
+    // runtime: URL может прийти и через событие (например при открытии из Safari)
     const sub = Linking.addEventListener('url', async ({ url }) => {
       try {
-        await handleAuthCallbackUrl(url);
+        console.log('[Auth] url event:', url ? url.substring(0, 80) + (url.length > 80 ? '...' : '') : 'null');
+        if (url) await handleAuthCallbackUrl(url);
       } catch (e) {
         console.warn('[Auth] url handle error', e);
       }
