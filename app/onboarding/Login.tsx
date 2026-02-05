@@ -121,7 +121,7 @@ export default function Login() {
   }));
 
   // =========================
-  // ✅ CORE FIX: deep link + resume refresh
+  // ✅ CORE FIX: resume refresh (после подтверждения почты в браузере/почте)
   // =========================
 
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -161,38 +161,10 @@ export default function Login() {
     }
   };
 
-  // 1) Ловим deep link holdyou://confirmed
-  useEffect(() => {
-    const onUrl = ({ url }: { url: string }) => {
-      if (url.startsWith('holdyou://confirmed')) {
-        if (modalType !== 'confirm') {
-          setModalType('confirm');
-        }
-        tryRefreshAndEnter('deeplink');
-      }
-    };
-
-    const sub = Linking.addEventListener('url', onUrl);
-
-    (async () => {
-      try {
-        const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && initialUrl.startsWith('holdyou://confirmed')) {
-          if (modalType !== 'confirm') {
-            setModalType('confirm');
-          }
-          tryRefreshAndEnter('deeplink');
-        }
-      } catch (e) {
-        // ignore
-      }
-    })();
-
-    return () => {
-      sub.remove();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modalType]);
+  // ✅ FIX (только текущая проблема):
+  // УБИРАЕМ слушалку holdyou://confirmed
+  // Потому что подтверждение у нас теперь идёт через holdyou://auth/callback?...tokens...
+  // А "confirmed" может ловить лишние диплинки/мешать, и вообще больше не используется.
 
   // 2) Когда пользователь вернулся из почты/браузера в приложение — пробуем refresh автоматически
   useEffect(() => {

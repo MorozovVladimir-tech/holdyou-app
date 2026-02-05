@@ -370,8 +370,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
-      // 2) ВАЖНО: для https://.../confirmed?code=... НЕ ДЕЛАЕМ exchangeCodeForSession
-      // Иначе получишь invalid flow state (потому что это не OAuth flow, state не создавался)
+      // 2) ✅ FIX ПО ТЕКУЩЕЙ ПРОБЛЕМЕ:
+      // Если Universal Link /confirmed пришёл с ?code=... — пробуем обменять code на session.
+      // Это нужно, потому что иначе user остаётся null (как у тебя в логах).
       if (isHttpsConfirmed) {
         const code =
           ((q.code as string) ?? (q.authorization_code as string) ?? '') ||
@@ -380,9 +381,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
           getQueryParam(url, 'code', true) ||
           getQueryParam(url, 'authorization_code', true);
 
-        console.warn(
-          '[Auth] confirmed link without tokens; NOT exchanging code in-app (would cause invalid flow state). codePresent=',
-          !!code
+        if (!code) {
+          console.warn('[Auth] confirmed link without tokens and without code; skip');
+          return;
+        }
+
+        console.log('[Auth] confirmed link has code; trying exchangeCodeForSession (https url)');
+
+        const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+        if (exErr) {
+          console.warn('[Auth] exchangeCodeForSession (confirmed https) error', exErr);
+          return;
+        }
+
+        const s = await waitForSession('after exchange (confirmed https)');
+        const su = s?.user ?? null;
+
+        setUser(su);
+        if (su) await ensureSenderProfile(su);
+
+        console.log(
+          '[Auth] after exchange (confirmed https): hasSession=',
+          !!s,
+          'userId=',
+          su?.id ?? 'null',
+          'email=',
+          (su as any)?.email ?? 'null'
         );
         return;
       }

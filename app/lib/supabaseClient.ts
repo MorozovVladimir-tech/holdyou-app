@@ -1,3 +1,4 @@
+// app/lib/supabaseClient.ts
 /**
  * Main Supabase client file.
  * Singleton Supabase client instance used throughout the app.
