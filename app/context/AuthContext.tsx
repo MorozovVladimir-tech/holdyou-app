@@ -78,6 +78,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // ✅ защита от двойной обработки callback
   const isExchangingRef = useRef(false);
+  // ✅ один обмен на один code (url event иногда приходит дважды — второй вызов даёт invalid flow state)
+  const lastExchangedCodeRef = useRef<string | null>(null);
 
   // ======================
   // SMALL UTILS
@@ -386,8 +388,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return;
         }
 
-        console.log('[Auth] confirmed link has code; trying exchangeCodeForSession (https url)');
+        if (lastExchangedCodeRef.current === code) {
+          console.log('[Auth] already tried exchange for this code; skip duplicate');
+          return;
+        }
+        lastExchangedCodeRef.current = code;
 
+        // Передаём url как есть, чтобы redirect_uri совпадал с emailRedirectTo на сервере
+        console.log('[Auth] confirmed link has code; trying exchangeCodeForSession (https url)');
         const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
         if (exErr) {
           console.warn('[Auth] exchangeCodeForSession (confirmed https) error', exErr);
