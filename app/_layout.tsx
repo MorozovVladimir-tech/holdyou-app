@@ -108,6 +108,44 @@ function EmptyDeepLinkGuard() {
   return null;
 }
 
+/**
+ * Вариант A: при получении ссылки сброса пароля (https://holdyou.app/auth/reset-password?code=...)
+ * сразу открываем экран "Set a new password", чтобы exchangeCodeForSession вызвался пока code_verifier в storage.
+ * Не трогаем AuthContext, confirmed, сессию.
+ */
+function ResetPasswordLinkGuard() {
+  const router = useRouter();
+  const handledRef = useRef(false);
+
+  const handleUrl = (url: string | null) => {
+    if (!url || handledRef.current) return;
+    const isResetPassword =
+      url.startsWith('https://') &&
+      url.includes('holdyou.app') &&
+      url.includes('/auth/reset-password') &&
+      (url.includes('code=') || url.includes('access_token='));
+    if (!isResetPassword) return;
+    handledRef.current = true;
+    router.replace('/(reset)/reset-password' as any);
+    setTimeout(() => {
+      handledRef.current = false;
+    }, 2000);
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const initial = await Linking.getInitialURL();
+        handleUrl(initial);
+      } catch {}
+    })();
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => sub.remove();
+  }, []);
+
+  return null;
+}
+
 function PushGate() {
   const router = useRouter();
 
@@ -181,6 +219,7 @@ function AuthenticatedLayout({
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
             {/* ✅ только фикс текущей проблемы */}
             <EmptyDeepLinkGuard />
+            <ResetPasswordLinkGuard />
 
             <PushGate />
 
