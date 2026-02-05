@@ -1,5 +1,5 @@
 // app/(reset)/reset-password.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
@@ -15,6 +15,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
 
 const LAST_RECOVERY_URL_KEY = 'holdyou.lastRecoveryUrl';
+const SESSION_OPEN_TIMEOUT_MS = 15000;
 
 type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error';
 
@@ -55,6 +56,7 @@ function parseTokensFromUrl(url: string): Params {
 
 export default function ResetPasswordScreen() {
   const params = useLocalSearchParams<Params>();
+  const openingRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>('boot');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -77,6 +79,8 @@ export default function ResetPasswordScreen() {
     newPassword.length >= MIN_PASSWORD_LEN && newPassword === confirmPassword;
 
   async function openRecoverySession(payload: Params) {
+    if (openingRef.current) return;
+    openingRef.current = true;
     setPhase('boot');
     setErrorMessage(null);
 
@@ -90,37 +94,58 @@ export default function ResetPasswordScreen() {
     });
     console.log('=========================');
 
-    // MAIN PATH — tokens
-    if (access_token && refresh_token) {
-      const { error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
+    try {
+      // MAIN PATH — tokens
+      if (access_token && refresh_token) {
+        const setSessionPromise = supabase.auth.setSession({
+          access_token,
+          refresh_token,
+        });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('SESSION_TIMEOUT')),
+            SESSION_OPEN_TIMEOUT_MS
+          )
+        );
+        const { error } = await Promise.race([setSessionPromise, timeoutPromise]);
 
-      if (error) {
-        setPhase('error');
-        setErrorMessage(error.message);
+        if (error) {
+          setPhase('error');
+          setErrorMessage(error.message);
+          return;
+        }
+        setPhase('ready');
         return;
       }
 
-      setPhase('ready');
-      return;
-    }
+      // FALLBACK — code (вторичен)
+      if (code) {
+        const exchangePromise = supabase.auth.exchangeCodeForSession(code);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('SESSION_TIMEOUT')), SESSION_OPEN_TIMEOUT_MS)
+        );
+        const { error } = await Promise.race([exchangePromise, timeoutPromise]);
 
-    // FALLBACK — code (вторичен)
-    if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) {
-        setPhase('error');
-        setErrorMessage(error.message);
+        if (error) {
+          setPhase('error');
+          setErrorMessage(error.message);
+          return;
+        }
+        setPhase('ready');
         return;
       }
-      setPhase('ready');
-      return;
-    }
 
-    setPhase('error');
-    setErrorMessage('Invalid recovery link');
+      setPhase('error');
+      setErrorMessage('Invalid recovery link');
+    } catch (e) {
+      const msg = e instanceof Error && e.message === 'SESSION_TIMEOUT'
+        ? 'Connection timed out. Check your network and try again.'
+        : (e instanceof Error ? e.message : 'Something went wrong.');
+      setPhase('error');
+      setErrorMessage(msg);
+    } finally {
+      openingRef.current = false;
+    }
   }
 
   // Router params
