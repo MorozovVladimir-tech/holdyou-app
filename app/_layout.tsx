@@ -5,7 +5,10 @@ import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import * as Linking from 'expo-linking';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-reanimated';
+
+const LAST_RECOVERY_URL_KEY = 'holdyou.lastRecoveryUrl';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { supabase } from './lib/supabaseClient';
@@ -128,6 +131,7 @@ function ResetPasswordLinkGuard() {
       url.startsWith('holdyou://') && url.includes('auth/reset-password');
     if (!isHttpsReset && !isDeepLinkReset) return;
     handledRef.current = true;
+    AsyncStorage.setItem(LAST_RECOVERY_URL_KEY, url).catch(() => {});
     router.replace('/(reset)/reset-password' as any);
     setTimeout(() => {
       handledRef.current = false;

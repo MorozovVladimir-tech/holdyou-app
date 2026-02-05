@@ -10,8 +10,11 @@ import {
   ActivityIndicator,
   Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, router } from 'expo-router';
 import { supabase } from '../lib/supabaseClient';
+
+const LAST_RECOVERY_URL_KEY = 'holdyou.lastRecoveryUrl';
 
 type Phase = 'boot' | 'ready' | 'saving' | 'done' | 'error';
 
@@ -133,7 +136,7 @@ export default function ResetPasswordScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params?.access_token, params?.refresh_token, params?.type, params?.code]);
 
-  // Linking fallback
+  // AsyncStorage + Linking: сначала читаем URL, сохранённый Guard'ом, используем и чистим ключ
   useEffect(() => {
     const onUrl = ({ url }: { url: string }) => {
       const parsed = parseTokensFromUrl(url);
@@ -143,6 +146,12 @@ export default function ResetPasswordScreen() {
     const sub = Linking.addEventListener('url', onUrl);
 
     (async () => {
+      const stored = await AsyncStorage.getItem(LAST_RECOVERY_URL_KEY);
+      if (stored) {
+        await AsyncStorage.removeItem(LAST_RECOVERY_URL_KEY);
+        onUrl({ url: stored });
+        return;
+      }
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) onUrl({ url: initialUrl });
     })();
