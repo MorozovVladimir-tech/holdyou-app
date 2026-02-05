@@ -1,5 +1,5 @@
 // app/_layout.tsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -34,46 +34,71 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-function DeepLinkGate() {
+/**
+ * FIX (только по текущей проблеме):
+ * iOS иногда присылает в приложение "пустой" deep link вида holdyou:/// (или holdyou://).
+ * Expo Router пытается заматчить его как route -> получаем экран "Unmatched Route: holdyou:///".
+ *
+ * Мы НЕ ломаем остальную логику: просто перехватываем такие URL и мгновенно редиректим
+ * в Talk или Login в зависимости от наличия session.
+ */
+function EmptyDeepLinkGuard() {
   const router = useRouter();
-  const { refreshUser, user } = useAuth();
+  const { user } = useAuth(); // только чтобы перерендер при смене user не ломал guard
+  const handledOnceRef = useRef(false);
 
-  const handleIncomingUrl = async (url: string | null) => {
+  const handleUrl = async (url: string | null) => {
     if (!url) return;
 
-    const parsed = Linking.parse(url);
+    // normalize
+    const u = url.trim();
+
+    // "пустые" варианты, которые и вызывают Unmatched Route
+    const isEmptyScheme =
+      u === 'holdyou://' ||
+      u === 'holdyou:///' ||
+      u.startsWith('holdyou:////') ||
+      u === 'holdyou:'; // на всякий
+
+    // Иногда parse даёт пустой path
+    const parsed = Linking.parse(u);
     const path = (parsed.path || '').replace(/^\/+/, '');
-    const lowerPath = path.toLowerCase();
+    const isEmptyPath = !path || path === '/';
 
-    // holdyou:/// или пустой path — даём время обработать auth/callback?tokens (подтверждение почты), потом редирект
-    if (!path || path === '/' || url === 'holdyou://' || url === 'holdyou:///') {
-      setTimeout(async () => {
-        const { data } = await supabase.auth.getSession();
-        const hasSession = !!data.session?.user;
-        router.replace((hasSession ? '/(tabs)/talk' : '/onboarding/login') as any);
-      }, 900);
-      return;
-    }
+    if (!isEmptyScheme && !isEmptyPath) return;
 
-    // confirmed (без токенов — юзер нажал "Я подтвердил" в приложении)
-    if (lowerPath.startsWith('confirmed')) {
-      try {
-        await refreshUser();
-      } catch {}
+    // Не даём циклов/дублей
+    if (handledOnceRef.current) return;
+    handledOnceRef.current = true;
 
+    try {
+      const { data } = await supabase.auth.getSession();
+      const hasSession = !!data.session?.user;
+
+      router.replace((hasSession ? '/(tabs)/talk' : '/onboarding/login') as any);
+    } catch {
+      // если сессия не читается — на логин
       router.replace('/onboarding/login' as any);
-      return;
+    } finally {
+      // через короткое время разрешаем новые обработки (на случай странных кейсов)
+      setTimeout(() => {
+        handledOnceRef.current = false;
+      }, 1200);
     }
   };
 
   useEffect(() => {
+    // cold start
     (async () => {
-      const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) await handleIncomingUrl(initialUrl);
+      try {
+        const initialUrl = await Linking.getInitialURL();
+        await handleUrl(initialUrl);
+      } catch {}
     })();
 
+    // runtime
     const sub = Linking.addEventListener('url', ({ url }) => {
-      handleIncomingUrl(url);
+      handleUrl(url);
     });
 
     return () => sub.remove();
@@ -139,8 +164,13 @@ function PushGate() {
   return null;
 }
 
-function AuthenticatedLayout({ colorScheme }: { colorScheme: 'light' | 'dark' | null | undefined }) {
+function AuthenticatedLayout({
+  colorScheme,
+}: {
+  colorScheme: 'light' | 'dark' | null | undefined;
+}) {
   const { user } = useAuth();
+
   // При смене user (например после подтверждения почты) перемонтируем дерево — данные нового пользователя
   const userKey = user?.id ?? 'anon';
 
@@ -149,27 +179,29 @@ function AuthenticatedLayout({ colorScheme }: { colorScheme: 'light' | 'dark' | 
       <TalkProvider>
         <SubscriptionProvider>
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <DeepLinkGate />
+            {/* ✅ только фикс текущей проблемы */}
+            <EmptyDeepLinkGuard />
+
             <PushGate />
 
             <Stack initialRouteName="onboarding">
-                <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
-                {/* ✅ ВАЖНО: регистрируем РЕАЛЬНЫЙ экран reset-цепочки */}
-                <Stack.Screen name="(reset)/reset-password" options={{ headerShown: false }} />
+              {/* ✅ ВАЖНО: регистрируем РЕАЛЬНЫЙ экран reset-цепочки */}
+              <Stack.Screen name="(reset)/reset-password" options={{ headerShown: false }} />
 
-                <Stack.Screen
-                  name="modal"
-                  options={{ presentation: 'modal', title: 'Modal' }}
-                />
-              </Stack>
+              <Stack.Screen
+                name="modal"
+                options={{ presentation: 'modal', title: 'Modal' }}
+              />
+            </Stack>
 
-              <StatusBar style="auto" />
-            </ThemeProvider>
-          </SubscriptionProvider>
-        </TalkProvider>
-      </SenderProvider>
+            <StatusBar style="auto" />
+          </ThemeProvider>
+        </SubscriptionProvider>
+      </TalkProvider>
+    </SenderProvider>
   );
 }
 

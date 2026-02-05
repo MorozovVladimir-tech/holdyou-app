@@ -284,6 +284,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const handleAuthCallbackUrl = async (url: string) => {
     if (!url) return;
 
+    // ✅ FIX: фильтруем мусорные deep-links, которые иногда приходят после открытия приложения
+    // иначе Expo Router может упасть на "Unmatched Route: holdyou:///"
+    if (url === 'holdyou://' || url === 'holdyou:///' || url === 'holdyou:///') {
+      console.log('[Auth] ignore empty scheme url:', url);
+      return;
+    }
+
     const parsed = Linking.parse(url);
 
     const fullPath = [parsed.hostname, parsed.path]
@@ -328,7 +335,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const hasTokens = !!(accessToken && refreshToken);
 
       console.log('[Auth] url event:', url);
-      console.log('[Auth] callback URL path=', fullPath, 'isHttpsConfirmed=', isHttpsConfirmed, 'hasTokens=', hasTokens);
+      console.log(
+        '[Auth] callback URL path=',
+        fullPath,
+        'isHttpsConfirmed=',
+        isHttpsConfirmed,
+        'hasTokens=',
+        hasTokens
+      );
 
       // 1) Email confirm / любые случаи с токенами -> setSession
       const sessionFromUrl = extractSessionFromUrl(url);
