@@ -119,12 +119,14 @@ function ResetPasswordLinkGuard() {
 
   const handleUrl = (url: string | null) => {
     if (!url || handledRef.current) return;
-    const isResetPassword =
+    const isHttpsReset =
       url.startsWith('https://') &&
       url.includes('holdyou.app') &&
       url.includes('/auth/reset-password') &&
       (url.includes('code=') || url.includes('access_token='));
-    if (!isResetPassword) return;
+    const isDeepLinkReset =
+      url.startsWith('holdyou://') && url.includes('auth/reset-password');
+    if (!isHttpsReset && !isDeepLinkReset) return;
     handledRef.current = true;
     router.replace('/(reset)/reset-password' as any);
     setTimeout(() => {

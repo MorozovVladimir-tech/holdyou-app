@@ -14,7 +14,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import { supabase } from '../lib/supabaseClient';
+import { supabase, supabaseRecovery } from '../lib/supabaseClient';
 
 const SENDER_PROFILE_STORAGE_KEY = 'holdyou_sender_profile_v2';
 
@@ -565,7 +565,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const sendPasswordReset = async (email: string): Promise<void> => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    const { error } = await supabaseRecovery.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: 'https://holdyou.app/auth/reset-password',
     });
 

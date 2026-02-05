@@ -39,3 +39,18 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     storageKey: 'holdyou.supabase.auth',
   },
 });
+
+/**
+ * Только для запроса сброса пароля. С flowType 'implicit' Supabase редиректит
+ * с #access_token=...&refresh_token=...&type=recovery — verifier не нужен.
+ * Остальное приложение использует supabase (pkce).
+ */
+export const supabaseRecovery = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    flowType: 'implicit',
+    detectSessionInUrl: false,
+    persistSession: false,
+    storage: AsyncStorage,
+    storageKey: 'holdyou.supabase.recovery',
+  },
+});
