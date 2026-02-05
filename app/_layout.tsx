@@ -120,7 +120,7 @@ function ResetPasswordLinkGuard() {
   const router = useRouter();
   const handledRef = useRef(false);
 
-  const handleUrl = (url: string | null) => {
+  const handleUrl = async (url: string | null) => {
     if (!url || handledRef.current) return;
     const isHttpsReset =
       url.startsWith('https://') &&
@@ -131,21 +131,26 @@ function ResetPasswordLinkGuard() {
       url.startsWith('holdyou://') && url.includes('auth/reset-password');
     if (!isHttpsReset && !isDeepLinkReset) return;
     handledRef.current = true;
-    AsyncStorage.setItem(LAST_RECOVERY_URL_KEY, url).catch(() => {});
-    router.replace('/(reset)/reset-password' as any);
-    setTimeout(() => {
-      handledRef.current = false;
-    }, 2000);
+    try {
+      await AsyncStorage.setItem(LAST_RECOVERY_URL_KEY, url);
+      router.replace('/(reset)/reset-password' as any);
+    } finally {
+      setTimeout(() => {
+        handledRef.current = false;
+      }, 2000);
+    }
   };
 
   useEffect(() => {
     (async () => {
       try {
         const initial = await Linking.getInitialURL();
-        handleUrl(initial);
+        await handleUrl(initial);
       } catch {}
     })();
-    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      handleUrl(url);
+    });
     return () => sub.remove();
   }, []);
 

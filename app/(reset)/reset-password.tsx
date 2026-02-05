@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, router } from 'expo-router';
-import { supabase } from '../lib/supabaseClient';
+import { supabase, supabaseRecovery } from '../lib/supabaseClient';
 
 const LAST_RECOVERY_URL_KEY = 'holdyou.lastRecoveryUrl';
 const SESSION_OPEN_TIMEOUT_MS = 15000;
@@ -95,9 +95,10 @@ export default function ResetPasswordScreen() {
     console.log('=========================');
 
     try {
-      // MAIN PATH — tokens
+      // MAIN PATH — tokens: используем supabaseRecovery (persistSession: false),
+      // чтобы не зависать на основном клиенте при recovery-токенах (известная проблема RN).
       if (access_token && refresh_token) {
-        const setSessionPromise = supabase.auth.setSession({
+        const setSessionPromise = supabaseRecovery.auth.setSession({
           access_token,
           refresh_token,
         });
@@ -120,7 +121,7 @@ export default function ResetPasswordScreen() {
 
       // FALLBACK — code (вторичен)
       if (code) {
-        const exchangePromise = supabase.auth.exchangeCodeForSession(code);
+        const exchangePromise = supabaseRecovery.auth.exchangeCodeForSession(code);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('SESSION_TIMEOUT')), SESSION_OPEN_TIMEOUT_MS)
         );
@@ -200,7 +201,8 @@ export default function ResetPasswordScreen() {
 
     setPhase('saving');
 
-    const { error } = await supabase.auth.updateUser({
+    // Сессия восстановления живёт в supabaseRecovery; обновляем пароль там.
+    const { data, error } = await supabaseRecovery.auth.updateUser({
       password: newPassword,
     });
 
@@ -208,6 +210,14 @@ export default function ResetPasswordScreen() {
       setPhase('error');
       setErrorMessage(error.message);
       return;
+    }
+
+    // Переносим новую сессию в основной клиент, чтобы пользователь остался залогинен.
+    if (data?.session) {
+      await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token ?? '',
+      });
     }
 
     setPhase('done');
