@@ -394,9 +394,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
         lastExchangedCodeRef.current = code;
 
-        // Передаём url как есть, чтобы redirect_uri совпадал с emailRedirectTo на сервере
-        console.log('[Auth] confirmed link has code; trying exchangeCodeForSession (https url)');
-        const { error: exErr } = await supabase.auth.exchangeCodeForSession(url);
+        // API ожидает код (UUID), а не полный URL — иначе сервер возвращает invalid flow state
+        console.log('[Auth] confirmed link has code; trying exchangeCodeForSession (code only)');
+        const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
         if (exErr) {
           console.warn('[Auth] exchangeCodeForSession (confirmed https) error', exErr);
           return;
