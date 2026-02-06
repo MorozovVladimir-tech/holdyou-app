@@ -77,6 +77,9 @@ export async function rescheduleSenderNotifications(
       // продолжаем, попробуем всё равно вставить новые
     }
 
+    const tz =
+      Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Almaty';
+
     // 2) Формируем новые записи
     const rows: any[] = [];
 
@@ -91,6 +94,7 @@ export async function rescheduleSenderNotifications(
           label: 'morning',
           hour: morning.hour,
           minute: morning.minute,
+          timezone: tz,
         });
       }
 
@@ -101,6 +105,7 @@ export async function rescheduleSenderNotifications(
           label: 'evening',
           hour: evening.hour,
           minute: evening.minute,
+          timezone: tz,
         });
       }
     } else {
@@ -111,6 +116,7 @@ export async function rescheduleSenderNotifications(
         label: 'random',
         hour: null,
         minute: null,
+        timezone: tz,
       });
     }
 
