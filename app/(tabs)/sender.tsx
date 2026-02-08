@@ -244,7 +244,10 @@ export default function SenderScreen() {
       });
 
       if (user?.id) {
+        console.log('[PushDiag] sender handleSave: about to call registerForPushNotificationsAsync userId=', user.id);
         await registerForPushNotificationsAsync(user.id);
+      } else {
+        console.log('[PushDiag] sender handleSave: skip registerForPush because !user?.id');
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
