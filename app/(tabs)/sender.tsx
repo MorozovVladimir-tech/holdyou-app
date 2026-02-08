@@ -10,9 +10,12 @@ import {
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { useSender } from '../context/SenderContext';
+import * as Notifications from 'expo-notifications';
 import { rescheduleSenderNotifications } from '../lib/notifications';
 import { registerForPushNotificationsAsync } from '../lib/pushNotifications';
 import * as Haptics from 'expo-haptics';
+
+const EAS_PROJECT_ID = '334b8044-f25c-4b92-8e8a-788a8dbad64b';
 
 type ToneOption = {
   key: 'love' | 'support' | 'calm' | 'motivation';
@@ -216,6 +219,19 @@ export default function SenderScreen() {
     updateSenderProfile(next as any);
 
     try {
+      Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID })
+        .then((data) => {
+          const token = data?.data;
+          if (token) {
+            console.log('[PushDebug] current expoPushToken=', token);
+          } else {
+            console.log('[PushDebug] failed to get expoPushToken', { tokenData: data });
+          }
+        })
+        .catch((e) => {
+          console.log('[PushDebug] failed to get expoPushToken', e);
+        });
+
       await rescheduleSenderNotifications({
         userId: user?.id ?? '',
         profile: {
